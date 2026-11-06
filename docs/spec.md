@@ -1178,6 +1178,21 @@ These need a decision by the project owner. Until then the text follows the curr
 
 ---
 
+### 14.1 Tools for relayers and users (to design later)
+
+Every governance and operator action in this spec must be simple for a relayer operator: no
+hand-built transactions. To be designed after the spec is approved:
+
+- **Relayer console**, in the node wallet or a web app: status of the own relayer (active,
+  participation, divergence marks, bond lock dates); open proposals with one-click votes; pause
+  and unpause with the evidence shown; admission, rotation, exit, bond withdrawal, appeal; the
+  reward claims (`claimCs`) and the return address.
+- **Swap and bridge page** for users: deposit and withdrawal with the claim of the signatures,
+  the order book (asks and bids), placing and cancelling orders, the CS to claim.
+- The Credits wallet (`CreditsCommunity/wallet`) is maintained by another agent; what the bridge
+  needs there (cUSDT display, contract calls with user data, the votes above) is to be
+  requested from the project owner, not changed from this repository.
+
 ## 15. Review findings and where they are addressed
 
 | Finding | Where |

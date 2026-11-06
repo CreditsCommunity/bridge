@@ -534,7 +534,7 @@ A later rise of the requirement never applies to existing relayers. For the cap 
 |---|---|---|---|---|
 | `transfer`, `transferFrom`, `approve` | yes | yes | yes | yes |
 | `approveMint` | yes | no | yes, ids < `blockDepositLimit` once attested | same |
-| `burnForBsc` | yes | no | yes | yes |
+| `burnForBsc` | yes | only net amounts below `delayThreshold` (D2) | yes | yes |
 | `migrate` | — | no | — | yes |
 | `deliverCs`, `claimCs`, `setReturnAddress` | yes | yes | yes | yes |
 | `payable` `ask`/`sell`, `placeBid`, `buy` | yes | no | no | no |
@@ -632,7 +632,7 @@ duplicates; every signer MUST be in the current signer set.
 | Method | Who | Rules |
 |---|---|---|
 | `deposit(amount, creditsTo, maxCsPrice)` | user | Not paused, not `withdrawOnly`; `signers.length ≥ 3` (L5); `amount` multiple of 10¹⁰ and ≥ `minDeposit`; `creditsTo ≠ 0`; `userUsdt + amount ≤ cap`. Pulls USDT measuring the balance delta. Emits `Deposit(id, from, amount, creditsTo, maxCsPrice)` |
-| `claim(Claim, sigs)` | anyone | Not paused; not claimed; `threshold()` valid signatures; `kind 1` rules below. If the rolling daily cap would be exceeded, the claim is queued (M4) instead of reverting. If the signatures include fewer than `floor(W/2)+1` whitelisted signers (`W` = whitelisted members of the signer set; `W = 0` always counts as fewer) and `undelayedWindow + amount > delayThreshold`, it is queued for 24 h (H3). Else paid. Marks `claimed[id]` |
+| `claim(Claim, sigs)` | anyone | Not paused, except a `kind 0` claim below `delayThreshold` within the daily cap, which is paid also while paused (D2); not claimed; `threshold()` valid signatures; `kind 1` rules below. If the rolling daily cap would be exceeded, the claim is queued (M4) instead of reverting. If the signatures include fewer than `floor(W/2)+1` whitelisted signers (`W` = whitelisted members of the signer set; `W = 0` always counts as fewer) and `undelayedWindow + amount > delayThreshold`, it is queued for 24 h (H3). Else paid. Marks `claimed[id]` |
 | `executeQueued(count)` | anyone | Not paused; pays queued claims in FIFO order whose unlock time has passed, within the daily cap |
 | `updateSigners(SignerSet, sigs)` | anyone | `threshold()` of the current signers; `nonce = signerNonce + 1`; new set non-empty, sorted, ≤ 64; sets `removedAt` for removed signers; `foundersToAdd` only while not `foundersFrozen`, each in the new set; `freezeFounders` sets `foundersFrozen`. Founders leave the founder set only by their own `FounderRemoval` or a matured removal |
 | `requestFounderRemoval(FounderRemoval, sigs)` | anyone | Signed by the founder alone: immediate. Signed by `threshold()` instead: effective after 30 days unless cancelled by a majority of founders |
@@ -880,11 +880,19 @@ provable this way in version 1.
 
 ### 8.9 Pause and unpause
 
-Current text (scope and limits are [§14](#14-open-decisions) D2):
+Decision D2 (2026-11-06): a pause started by one relayer stops everything except small
+withdrawals, so a false alarm never locks users out.
 
 - Any relayer pauses Credits (`pause`) and BSC (`Pause` signature with a deadline of at most 1
   hour, or `pauseDirect`). While paused, the methods of [§5.12](#512-methods-by-contract-state)
-  apply; on BSC no deposits, claims or queue execution.
+  apply. Small withdrawals continue: on Credits `burnForBsc` stays open for a net amount below
+  `delayThreshold` (1,000 USDT), and relayers keep signing those withdrawals; on BSC `claim`
+  stays open for `kind 0` claims with `amount < delayThreshold`, within the rolling daily cap and
+  without the queue. Deposits, mints, larger burns and claims, queued claims and `kind 1`
+  (migration) claims stop.
+- Cost of this choice: during a pause a colluding threshold can still be paid small false claims
+  up to the daily cap (2,000 USDT per 24 h by default) until the unpause decision or the proofs
+  act; the daily cap is the bound.
 - A relayer that paused cannot pause again for 7 days on either chain; its own bond lock is
   extended by the length of every pause it started (C1).
 - Unpause needs `U = max(T, ceil(2N/3))` approvals on Credits and `unpauseThreshold()`
@@ -1146,7 +1154,7 @@ These need a decision by the project owner. Until then the text follows the curr
 | # | Topic | Current decision | Review concern | Options |
 |---|---|---|---|---|
 | D1 | Price limits on automated purchases (H8, M3) | **Decided 2026-11-06.** No price limit anywhere: the conversion at mint is small (≤ `conversionMax`) and a free market rewards whoever sells CS; the buyback is spread in hourly slices of 1/168 of the epoch fund (option d) | — | — |
-| D2 | Single-relayer pause (H2, former §14.3) | Any relayer pauses both chains immediately; claims stop too | One relayer can freeze all funds repeatedly | Whether claims below the delay threshold continue during a single-relayer pause; one pause per relayer per 7 days (in the text); consequences of an unfounded pause (in the text: `Inactive` 30 days) |
+| D2 | Single-relayer pause (H2, former §14.3) | **Decided 2026-11-06.** Withdrawals below 1,000 USDT continue during a pause, within the daily cap; one pause per relayer per 7 days; an unfounded pause makes the pauser `Inactive` for 30 days ([§8.9](#89-pause-and-unpause)) | — | — |
 | D3 | Objection during the 7-day wait (M6) | One third of active relayers can reject an applicant | Incumbents can veto every applicant and keep `N` small; contrary to automatic admission | Remove it; let it only trigger a re-attestation of eligibility; require a majority with a public record |
 | D4 | Use of the slash reserve | Not decided | — | Proposal: reimburse users pro rata after a shortfall, by vote |
 | D5 | Provisional values | As in the text | — | Bids in the book (yes); taker pays 0.1 % also on the conversion at mint, not on the buyback; owner share 20 % and the 100 largest delegators; participation 80 %; new-entrant bond: 50 USDT on the vault, the rest in CS, cUSDT or USDT; initial vault cap 10,000 (hard 20,000 while founders reach `T`); daily cap 2,000 rolling (≤ cap / 5, was 5,000 per UTC day); minimum 5 USDT; prover share 10 % |

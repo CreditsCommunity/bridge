@@ -1087,7 +1087,7 @@ tests nightly. Heavy jobs never run on the shared server.
 | Contract → contract CS transfers are refused | `solver/src/smartcontracts.cpp` `test_violations` (`SourceIsContract`), `csnode/src/itervalidator.cpp` (`kContractViolation`) |
 | Contract-emitted transfers carry no user data | `solver/src/smartcontracts.cpp` (≈ line 2328): emitted transfers rebuilt as plain transactions without user fields |
 | Emitted transfers are paid by the caller | `prevalidate` requires the start transaction's `max_fee` to cover the new state and every emitted transfer; `walletscache.cpp` charges the initiator (security review, M8) |
-| A `payable` that throws returns the CS | `walletscache.cpp` `invokeReplenishPayableContract` / `rollbackExceededTimeoutContract` refund the amount minus the fee (security review; private-network confirmation pending) |
+| A `payable` that throws returns the CS | `walletscache.cpp` `invokeReplenishPayableContract` / `rollbackExceededTimeoutContract`; private network (5 nodes, CI run 42183949839, 2026-11-06): a 7 CS payment without user data was refused, the API answered "call to contract failed", the sender lost only the 0.0175 CS fee, the contract received nothing |
 | `payable` receives the text user field | user field id 1 (`cs::trx_uf::ordinary::Text`) passed as `byte[]` (`api/src/executor.cpp`) |
 | A call costs ≈ 0.0175 CS, independent of state size | `csnode/src/fee.cpp`: start tx 0.00874 (< 5 KB), new state 0.00874, execution 0.00874 CS per second |
 | Time the node waits for the executor | `executor_receive_timeout` default 4,000 ms per node (`client/config/config.hpp`); consensus limit 60 s (`Consensus::TimeSmartContract`) |
@@ -1102,19 +1102,25 @@ tests nightly. Heavy jobs never run on the shared server.
 | BSC finality | `finalized` 1–2 blocks behind `latest` (≈ 0.45–0.9 s) on mainnet and testnet RPCs, 2026-11-06 |
 | Delegations readable from the node API | `api.thrift` `DelegatedItem` (`wallet`, `sum`, `validUntil`, `fromTime`, `coeff`); contracts cannot read them |
 | 1-year delegations | `coeff = Anni = 4` for a term ≥ 4 × 7,862,400 s; timed delegations cannot be withdrawn before expiry; minimum 5 CS (`csnode/src/nodecore.cpp`, `itervalidator.cpp`) |
+| Block time on a real network | Private network: `getBlockchainTimeMills()` in two calls 23.2 s apart (wall clock) returned values 22.7 s apart, 1.1–1.6 s ahead of the sender's clock, recorded identically on all 5 nodes (re-execution while syncing not covered) |
+| `payable` with user data | Private network: 11 CS with text user field `bond:relayer-1` accepted; the contract received 11 CS and the exact user data |
+| Emitted transfers on a real network | Private network: `sendTransaction(contract, wallet, 3, userData)` delivered exactly 3 CS with no user fields (type 16); an emitted transfer to another contract failed the whole call ("call to contract failed", no CS moved, state unchanged) |
+| `getBalance` is not a usable eligibility source | Private network: the contract read 290.004 CS for a wallet the API reported at 299.948 CS around the same time |
+| Same state on every node | Private network: the probe contract's state hash was identical on all 5 nodes |
+| Executor speed in CI | GitHub runner: approval median 2.7 ms (1518) / 2.9 ms (community), state 1.8–5.3 KB over 500 deposits; secp256k1 recovery median 13.6 / 13.9 ms |
 | Staking rewards are on on mainnet | Mainnet node log, 2026-11-05: "stakingOn = true, miningOn = true, blockReward = 1.00" (L8 resolved) |
 | Delegation to a contract is refused | `itervalidator.cpp` (`kTransactionProhibited`) |
 | Sandbox classes | `BigDecimal`, `BigInteger`, `TreeMap`, `String.format` need no permission (`PermissionsManager.java`); `SigProbe` runs under it |
 
 ### 13.2 TO VERIFY
 
-On the private Credits network unless noted (the CI network probe covers 1–4):
+On the private Credits network unless noted (block time on live nodes, refused payments,
+emitted amounts and failed-call reporting are verified in [§13.1](#131-verified)):
 
-1. Block time from `getBlockchainTimeMills()` is identical on every node and during
-   re-execution while syncing.
-2. A `payable` that throws returns the CS to the sender, and how long it takes.
-3. Emitted CS transfers: exact amount received after the `double` conversion.
-4. How the API reports a failed call (`approveMint`, `burnForBsc`, `payable`) to the sender.
+1. Block time from `getBlockchainTimeMills()` during re-execution by a node that syncs.
+2. Amounts with many decimals through the `double` of `sendTransaction` (whole amounts verified).
+3. Why `getBalance` inside a contract differs from `WalletBalanceGet` (not used by the design).
+4. How the API reports failed `approveMint` and `burnForBsc` calls to relayers and users.
 5. Credits reorganisation depths observed on mainnet, to set `creditsConfirmations`.
 6. Performance at the bounds of [§5.11](#511-bounded-state-and-work) on both executors.
 7. The token cache shows cUSDT balances after mints, burns, fills and internal moves.

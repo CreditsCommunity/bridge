@@ -367,6 +367,7 @@ relayer concerned, **A** anyone. All amounts are `BigDecimal` (Variant `v_big_de
 | `applyRelayer(operator, ownerWallet, bscSigner, signatureUrl, version)` | W | Not blocked; not already a relayer; `bscSigner` never registered before (M1); ≤ 64 non-exited relayers; bond already paid by the same wallet ([§5.5](#55-incoming-cs-payable) `bond`, and `depositBond` on the vault attested as `bondUsdtOnBsc`) covering `bondRequired` computed now ([§5.10](#510-bond-required-at-entry)); founder if the founder phase is open. Status `Applied` |
 | `attest(period, kind, payload, version)` | R | Attestations of facts the contract cannot read ([§5.8](#58-attestations)): eligibility, payee lists, vault view, signer set applied, block limit, bond on BSC |
 | `activate(relayerId)` | A | After 7 days, eligibility and bond attested, not rejected, `N < 64`. Status `Active`; a new signer set is recorded |
+| `activateBootstrap()` | A | State `Bootstrap`, at least 3 applicants each attested eligible by more than half of the other applicants, founder bonds paid: all of them become `Active` founders; state `AwaitingVault` ([§5.14](#514-bootstrap)) |
 | `setOperator(op)`, `setSignatureUrl(url)`, `setOwnerWallet(w)`, `setReturnAddress(addr)` | W | Immediate |
 | `rotateSigner(bscSigner)` | W | New key never registered before; the old key stays in `signerHistory` and stays provable while any bond of this relayer is held; a new signer set is recorded |
 | `leave()` | W | Not paused (C1); status `Exiting`; a new signer set is recorded; `exitAt = now`, `exitNonce` = its nonce |
@@ -529,6 +530,8 @@ A later rise of the requirement never applies to existing relayers. For the cap 
 
 (underspecified 4)
 
+In the `Bootstrap` and `AwaitingVault` states ([§5.14](#514-bootstrap)) only the bootstrap methods listed there and getters are open.
+
 | Method | Normal | Paused | Blocked | Blocked + migration |
 |---|---|---|---|---|
 | `transfer`, `transferFrom`, `approve` | yes | yes | yes | yes |
@@ -556,11 +559,31 @@ harness).
 
 ### 5.14 Bootstrap
 
-(underspecified 15) The constructor takes the initial relayers (node wallet, operator, owner
-wallet, BSC signer, URL), all founders, `Active` from deploy, with bonds due within 30 days: a
-founder whose bond is not paid by then becomes `Inactive`. The vault is deployed with the same
-signers and founders. Both deploy transactions and the initial list are published with the
-release.
+(underspecified 15; decision D7, 2026-11-06) One person deploys, nobody holds privileges, and the
+bridge starts only with at least 3 relayers.
+
+1. **Deploy on Credits.** Anyone (in practice one project member) deploys `CusdtBridge` with no
+   relayers, no owner and no constructor privileges. It starts in state `Bootstrap`: no mints, no
+   burns, no orders; only `bond`, `applyRelayer`, `attest` among applicants, `cancelApplication`
+   and getters.
+2. **Founders apply.** Each candidate pays the founder bond (100,000 CS through `bond`) and calls
+   `applyRelayer`. In `Bootstrap` there are no incumbents, so applicants attest each other's
+   eligibility (the [§8.5](#85-relayer-admission) rules: 1M CS of 1-year delegations, donors,
+   shares); an applicant counts as eligible when more than half of the other applicants attest
+   it. No 7-day wait in `Bootstrap`.
+3. **Activation on Credits.** When at least 3 applicants are eligible, anyone calls `activateBootstrap()`:
+   they become `Active` founders, the state becomes `AwaitingVault`. Fewer than 3: nothing
+   starts; an applicant may cancel and take its bond back after 7 days.
+4. **Vault deploy.** The vault is deployed after that, with constructor signers and founders
+   equal to the active set recorded on Credits (anyone can check this before using it), each
+   founder then deposits its 50 USDT with `depositBond`. The vault refuses deposits while it has
+   fewer than 3 signers or while any founder's 50 USDT bond is missing.
+5. **Link.** The founders attest the vault address on Credits (`T` attestations); from then on the
+   state is `Normal`. Both deploy transactions, the constructor arguments and the attestation are
+   published with the release.
+
+The deployer gains nothing from deploying: no key in either contract, no fee, no vote it would
+not have as a relayer.
 
 ---
 
@@ -1171,9 +1194,9 @@ These need a decision by the project owner. Until then the text follows the curr
 | D2 | Single-relayer pause (H2, former §14.3) | **Decided 2026-11-06.** Withdrawals below 1,000 USDT continue during a pause, within the daily cap; one pause per relayer per 7 days; an unfounded pause makes the pauser `Inactive` for 30 days ([§8.9](#89-pause-and-unpause)) | — | — |
 | D3 | Objection during the 7-day wait (M6) | **Decided 2026-11-06: removed.** Admission is automatic; only a `T` attestation of ineligibility rejects an applicant | — | — |
 | D4 | Use of the slash reserve | **Decided 2026-11-06.** Never used at once; 30-day appeal window for the slashed relayer; any use (return after a successful appeal, users' reimbursement, prover's share) only by a two-thirds vote of active relayers ([§8.8](#88-slashing-by-proof)) | — | — |
-| D5 | Provisional values | As in the text | — | Bids in the book (yes); taker pays 0.1 % also on the conversion at mint, not on the buyback; owner share 20 % and the 100 largest delegators; participation 80 %; new-entrant bond: 50 USDT on the vault, the rest in CS, cUSDT or USDT; initial vault cap 10,000 (hard 20,000 while founders reach `T`); daily cap 2,000 rolling (≤ cap / 5, was 5,000 per UTC day); minimum 5 USDT; prover share 10 % |
+| D5 | Provisional values | **Confirmed 2026-11-06.** As in the text | — | Bids in the book (yes); taker pays 0.1 % also on the conversion at mint, not on the buyback; owner share 20 % and the 100 largest delegators; participation 80 %; new-entrant bond: CS plus USDT on the vault (at least 50), no cUSDT (D6); initial vault cap 10,000 (hard 20,000 while founders reach `T`); daily cap 2,000 rolling (≤ cap / 5, was 5,000 per UTC day); minimum 5 USDT; prover share 10 % |
 | D6 | Bond assets (C2) | **Decided 2026-11-06.** CS on Credits plus USDT on the vault (at least 50) for the required value; no cUSDT; only CS counts for the cap bound | — | — |
-| D7 | Who deploys the contracts, and the initial founders | Not decided | — | — |
+| D7 | Who deploys the contracts, and the initial founders | **Decided 2026-11-06.** One person deploys, with no privileges; the bridge activates only with at least 3 eligible founders, who attest each other ([§5.14](#514-bootstrap)) | — | — |
 
 ---
 

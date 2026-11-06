@@ -6,7 +6,7 @@ Not approved. No code is written against it yet. Decisions still open are in
 [§14](#14-open-decisions); until they are taken, the text follows the user's current decision.
 
 This document specifies a bridge that carries USDT from BNB Smart Chain (BSC) to the Credits
-network as cUSDT, 1 to 1, and back; a CS ↔ cUSDT order book on Credits; and the relayer network
+network as csUSDT, 1 to 1, and back; a CS ↔ csUSDT order book on Credits; and the relayer network
 that connects the two chains. It replaces the design analysis of 2026-10-14 ("USDT bridge for
 Credits: analysis") where the two differ: the decisions taken after it are listed in
 [§2.3](#23-decisions-that-changed-since-the-analysis).
@@ -18,13 +18,15 @@ cited where a rule exists because of a finding.
 
 ---
 
+> **Token name.** The Credits token is **csUSDT** ("Credits Bridged USDT"): 1:1 with USDT held by the vault on BSC, not issued by Tether. The name `cUSDT` used in the early analysis and in the reviews in `docs/reviews/` belongs to Compound on Ethereum and was dropped (2026-11-06).
+
 ## Contents
 
 1. [Overview and goals](#1-overview-and-goals)
 2. [Decisions](#2-decisions)
 3. [Trust model](#3-trust-model)
 4. [Architecture](#4-architecture)
-5. [Credits contract `CusdtBridge`](#5-credits-contract-cusdtbridge)
+5. [Credits contract `CsUsdtBridge`](#5-credits-contract-csusdtbridge)
 6. [BSC contract `UsdtVault`](#6-bsc-contract-usdtvault)
 7. [Relayer process](#7-relayer-process)
 8. [Flows](#8-flows)
@@ -44,11 +46,11 @@ cited where a rule exists because of a finding.
 
 - A user deposits USDT into `UsdtVault` on BSC. Independent relayers see the deposit in a
   finalized BSC block and approve it on Credits. When enough of them agree, the Credits contract
-  `CusdtBridge` mints the same amount of cUSDT to the user, minus a fixed fee, and converts a small
+  `CsUsdtBridge` mints the same amount of csUSDT to the user, minus a fixed fee, and converts a small
   part into CS from the sell offers, so the user can pay Credits transaction fees.
-- A user burns cUSDT on Credits. The relayers sign the withdrawal for BSC. The user collects the
+- A user burns csUSDT on Credits. The relayers sign the withdrawal for BSC. The user collects the
   signatures on a static claim page and claims the USDT from `UsdtVault`, paying the BSC gas.
-- On Credits, holders of CS and cUSDT trade through an order book inside `CusdtBridge`: atomic, no
+- On Credits, holders of CS and csUSDT trade through an order book inside `CsUsdtBridge`: atomic, no
   arbiter, no capital from the team.
 
 **Goals.**
@@ -60,7 +62,7 @@ cited where a rule exists because of a finding.
 4. No admin and no upgradable code. Settings change only by the relayers' rules in this
    document, within hard caps fixed in the code.
 5. Users can always get out: after any failure short of a colluding threshold of relayers, every
-   cUSDT holder can still withdraw, including after a permanent block ([§8.10](#810-permanent-block-migration-and-end-of-life)).
+   csUSDT holder can still withdraw, including after a permanent block ([§8.10](#810-permanent-block-migration-and-end-of-life)).
 6. Losses in the worst case are bounded by caps that grow only as the guarantees grow.
 7. The contract state stays bounded: no user action can grow it without limit (C3).
 
@@ -75,8 +77,8 @@ threshold of relayers unable to steal (see [§3](#3-trust-model)).
 
 | Topic | Decision |
 |---|---|
-| Asset | BSC USDT (BEP-20, 18 decimals) ↔ cUSDT on Credits, 1 to 1, amounts in multiples of 10⁻⁸ USDT |
-| Credits contracts | One contract, `CusdtBridge`: token, bridge, relayer registry, bonds, order book, buyback, governance |
+| Asset | BSC USDT (BEP-20, 18 decimals) ↔ csUSDT on Credits, 1 to 1, amounts in multiples of 10⁻⁸ USDT |
+| Credits contracts | One contract, `CsUsdtBridge`: token, bridge, relayer registry, bonds, order book, buyback, governance |
 | BSC contract | `UsdtVault`: deposits, claims with EIP-712 threshold signatures, signer set, founders, whitelist, caps, bonds |
 | Relayer eligibility | Credits full node whose wallet holds ≥ 1,000,000 CS of incoming 1-year delegations from at least 2 wallets other than the owner's |
 | Admission | Automatic: eligibility attested by the relayers' software, 7-day wait, no sponsors and no objection by incumbents (decision D3); refused only if it would break the cap bound (I18). In `Bootstrap`: applicants attest each other, no wait ([§5.14](#514-bootstrap)) |
@@ -84,8 +86,8 @@ threshold of relayers unable to steal (see [§3](#3-trust-model)).
 | Governance threshold | more than half of all active relayers, no cap of 7 |
 | Bonds | Founders: 100,000 CS + 50 USDT. Later entrants: value ≥ max(1,000 USDT, 10 % of user USDT in the vault), fixed at entry |
 | Slashing | Automatic, by proof of a false withdrawal signature, verified in the Credits contract, callable in every state |
-| Fees | Bridge fee 0.05 cUSDT each way; swap fee 0.1 % paid by the taker; both fund a CS buyback for relayers and their delegators |
-| CS for new users | 2 % of each deposit (min 1, max 20 cUSDT) bought as CS from the lowest asks at mint |
+| Fees | Bridge fee 0.05 csUSDT each way; swap fee 0.1 % paid by the taker; both fund a CS buyback for relayers and their delegators |
+| CS for new users | 2 % of each deposit (min 1, max 20 csUSDT) bought as CS from the lowest asks at mint |
 | Prices | Free market: no price limit imposed by the contract, also on automated purchases; the depositor MAY set a maximum CS price for their own conversion; the buyback is spread in hourly slices over the epoch ([§8.4](#84-fees-buyback-and-rewards)) |
 | Large claims | Above 1,000 USDT per rolling 24 h (cumulative, not per claim), 24-hour delay unless the signatures include a majority of the whitelist |
 | Exit | Permanent block → withdraw-only on both chains; each user withdraws, or migrates their own funds to new contracts registered by vote, with a fallback to their own BSC address |
@@ -105,7 +107,7 @@ threshold of relayers unable to steal (see [§3](#3-trust-model)).
 | A new reward token | Value would have to come from the fees anyway; CS paid directly is simpler |
 | Mass transfer of funds for upgrades | The most valuable target for an attack; replaced by per-user migration |
 | Memo/tag on CS returns | The node drops user data on contract-emitted transactions ([§13.1](#131-verified)) |
-| cUSDT as bond collateral | Not accepted (decision D6): its value depends on the vault it should protect; bonds are CS on Credits and USDT on the vault, and only CS counts for the cap bound (C2) |
+| csUSDT as bond collateral | Not accepted (decision D6): its value depends on the vault it should protect; bonds are CS on Credits and USDT on the vault, and only CS counts for the cap bound (C2) |
 
 ### 2.3 Decisions that changed since the analysis
 
@@ -175,7 +177,7 @@ threshold of relayers unable to steal (see [§3](#3-trust-model)).
 4. **Value of slashed bonds.** CS has no reliable market price; slashed CS may be worth less than
    the loss. USDT bonds on the vault can be largely recovered by a coalition that controls the
    signer set (C2), so they count toward the entry requirement but not toward the cap bound;
-   cUSDT bonds are not accepted (D6).
+   csUSDT bonds are not accepted (D6).
 5. **Sybil relayers.** Disjoint-wallet rules raise the cost of one person running several
    relayers; they cannot prove that two wallets belong to different people. The founder-phase
    trade rule ([§5.9](#59-order-matching)) can be met by one person with two wallets.
@@ -204,11 +206,11 @@ lazy check that fails (conservative price lowered, relayers leaving) creates a r
 ```
             BSC                                   Credits
  ┌───────────────────────┐                 ┌──────────────────────────────┐
- │ UsdtVault             │                 │ CusdtBridge (one contract)    │
- │  deposit()  ── Deposit(id) ──┐          │  token cUSDT (v1 standard)    │
+ │ UsdtVault             │                 │ CsUsdtBridge (one contract)    │
+ │  deposit()  ── Deposit(id) ──┐          │  token csUSDT (v1 standard)    │
  │  claim(sigs) ◄─────────────┐ │          │  approveMint / burnForBsc     │
  │  signers, founders,        │ │          │  relayer registry, bonds      │
- │  whitelist, caps, delay    │ │          │  order book CS ↔ cUSDT        │
+ │  whitelist, caps, delay    │ │          │  order book CS ↔ csUSDT        │
  └───────────────────────────┘ │ │          │  buyback, rewards, governance │
             ▲                  │ │          └──────────────────────────────┘
             │ claim tx         │ │ finalized reads        ▲ approvals, digests
@@ -223,7 +225,7 @@ lazy check that fails (conservative price lowered, relayers leaving) creates a r
 
 - **`UsdtVault`** (Solidity, BSC): holds user USDT, relayers' USDT bonds and the slash reserve
   in separate ledgers. Not upgradable, no owner.
-- **`CusdtBridge`** (Java, Credits, `SmartContract` v3, `ExtensionTokenStandard` v1): the only
+- **`CsUsdtBridge`** (Java, Credits, `SmartContract` v3, `ExtensionTokenStandard` v1): the only
   Credits contract. Everything that must interact atomically lives in it, because contracts
   cannot call or pay each other.
 - **Relayer**: a separate process next to a Credits full node, never inside the node. Reads
@@ -247,10 +249,10 @@ lazy check that fails (conservative price lowered, relayers leaving) creates a r
 | Quantity | Representation |
 |---|---|
 | USDT on BSC | `uint256`, 18 decimals; every amount MUST be a multiple of 10¹⁰ (8 decimals) |
-| cUSDT | `BigDecimal`, scale 8; `units = USDT_wei / 10¹⁰`; `amountWei = units × 10¹⁰` |
+| csUSDT | `BigDecimal`, scale 8; `units = USDT_wei / 10¹⁰`; `amountWei = units × 10¹⁰` |
 | CS amounts kept by the contract | `BigDecimal`, scale 6 |
 | One emitted CS transfer | ≤ 10⁸ CS (L1: a `double` holds 15 significant digits; 10⁸ with 6 decimals is 15); larger amounts are paid in several calls |
-| Prices | cUSDT per 1 CS, `BigDecimal` scale 8, tick 10⁻⁸ |
+| Prices | csUSDT per 1 CS, `BigDecimal` scale 8, tick 10⁻⁸ |
 | Time | Credits: `getBlockchainTimeMills()` (block time, ms); BSC: `block.timestamp` (s) |
 | Credits address | Contract: base58 string of the 32-byte ed25519 public key; BSC data: `bytes32` of the same key |
 | BSC address | Contract: lowercase hex with `0x`, 42 characters, checked; BSC data: `address` |
@@ -261,11 +263,11 @@ amounts charged round up), and every rounding difference is kept in a dust accou
 
 ---
 
-## 5. Credits contract `CusdtBridge`
+## 5. Credits contract `CsUsdtBridge`
 
 Java 11, one top-level class (nested static classes allowed), `extends
 com.credits.scapi.v3.SmartContract implements com.credits.scapi.v1.ExtensionTokenStandard`.
-Token name "Credits USDT", symbol `cUSDT`, 8 decimals. No owner field, no admin method.
+Token name "Credits Bridged USDT", symbol `csUSDT`, 8 decimals. No owner field, no admin method.
 
 Every method that changes state reads time once with `getBlockchainTimeMills()` and runs the
 lazy updates that are due (governance applications, status updates, epoch bookkeeping, record
@@ -279,9 +281,9 @@ compaction), bounded in work per call ([§5.11](#511-bounded-state-and-work)).
 | `state` | `Bootstrap`, `AwaitingVault` or `Normal` ([§5.14](#514-bootstrap)); `normalSince` | — |
 | `link` | Vault address, EIP-712 domain separator, hash of the vault's initial signer set; set once by the link attestation ([§5.14](#514-bootstrap)) and used by `proveFalseSignature` | fixed |
 | `params` | Current governable parameters | fixed size |
-| `balances: Map<String, BigDecimal>` | cUSDT balances (free); a zero balance is removed | one per holder (each costs its creator a mint or transfer) |
+| `balances: Map<String, BigDecimal>` | csUSDT balances (free); a zero balance is removed | one per holder (each costs its creator a mint or transfer) |
 | `allowed` | Allowances, ERC-20 semantics; zero removed | per holder |
-| `totalSupply` | All cUSDT in existence, including escrowed, fund and locked | — |
+| `totalSupply` | All csUSDT in existence, including escrowed, fund and locked | — |
 | `pendingMints: Map<Long, PendingMint>` | Per deposit id: approvals grouped by data hash, first-approval time | ids in `[mintedBelow, attestedNextDepositId + 256)`; expire after 30 days |
 | `mintedBelow: long`, `mintedAbove: TreeSet<Long>` | Minted deposit ids | `mintedAbove` ≤ 1,024 entries: approvals for ids ≥ `mintedBelow + 1024` are refused (C3) |
 | `withdrawals` | Recent records by id: kind, from, BSC recipient, fallback, net amount, time, `hashStruct(Claim)` | the last 1,024 ids in full; older ids only in bucket roots |
@@ -290,9 +292,9 @@ compaction), bounded in work per call ([§5.11](#511-bounded-state-and-work)).
 | `relayers: Map<Long, Relayer>` | Relayer records ([§5.3](#53-relayer-record)) | ≤ 64 records that are not `Exited` or `Cancelled`; `Exited` and `Cancelled` records compacted to `signerHistory`; `Slashed` records compacted 30 days after the slash once no reserve proposal concerning them is open (N10) |
 | `signerHistory: Map<String, SignerUse>` | Every BSC signer key ever registered → relayer id, valid from/until (M1) | one per key; keys cannot be reused |
 | `signerSets: List<SignerSetRecord>` | Every vault signer set by nonce: signers, founders to add, freeze flag, hash (underspecified 3) | the last 64 sets in full, older as hashes |
-| `asks`, `bids: TreeMap<PriceKey, Order>` | Order book, price then id | ≤ 2,000 open orders in total, ≤ 20 per wallet, minimum size 10 CS and 0.10 cUSDT (C3) |
-| `lastPrice`, `dailyStats[8]` | Last fill price; per-day CS and cUSDT volumes for the 7-day VWAP | fixed |
-| `buybackFund: BigDecimal` | cUSDT from fees, not yet spent | — |
+| `asks`, `bids: TreeMap<PriceKey, Order>` | Order book, price then id | ≤ 2,000 open orders in total, ≤ 20 per wallet, minimum size 10 CS and 0.10 csUSDT (C3) |
+| `lastPrice`, `dailyStats[8]` | Last fill price; per-day CS and csUSDT volumes for the 7-day VWAP | fixed |
+| `buybackFund: BigDecimal` | csUSDT from fees, not yet spent | — |
 | `epochFund`, `sliceBudget`, `epochStart`, `lastSlot` | `epochFund` is the part of `buybackFund` reserved for the current epoch's slices (a sub-ledger, not a separate balance: I5 counts `buybackFund` once); its 1/168 hourly slice; start of the epoch; last hour slot consumed (N3) | fixed |
 | `csClaimable: Map<String, BigDecimal>` | CS owed to wallets (conversions, rewards, refunds) | one per wallet; claims below 0.001 CS stay in dust |
 | `returnAddress: Map<String, String>` | Wallet → its return address for CS | one per wallet that set one |
@@ -397,9 +399,9 @@ relayer concerned, **A** anyone. All amounts are `BigDecimal` (Variant `v_big_de
 | Method | Caller | Rules |
 |---|---|---|
 | (`payable`, command `ask`) | U | Places an ask: CS escrowed |
-| `placeBid(cusdtAmount, price)` | U | Escrows cUSDT from the caller's balance; minimum 0.10 cUSDT and the order limits of [§5.1](#51-state) |
-| `cancelAsk(id)`, `cancelBid(id)` | owner of the offer | CS to `csClaimable` of the owner; cUSDT back to the balance |
-| `buy(maxCusdt, maxPrice)` | U | Takes asks from the lowest price, then oldest; spends at most `maxCusdt` including the swap fee; `maxPrice` 0 = no limit (the caller's own choice); stops after 50 fills and returns the unspent rest. CS to the caller's `csClaimable` |
+| `placeBid(csUsdtAmount, price)` | U | Escrows csUSDT from the caller's balance; minimum 0.10 csUSDT and the order limits of [§5.1](#51-state) |
+| `cancelAsk(id)`, `cancelBid(id)` | owner of the offer | CS to `csClaimable` of the owner; csUSDT back to the balance |
+| `buy(maxCsUsdt, maxPrice)` | U | Takes asks from the lowest price, then oldest; spends at most `maxCsUsdt` including the swap fee; `maxPrice` 0 = no limit (the caller's own choice); stops after 50 fills and returns the unspent rest. CS to the caller's `csClaimable` |
 | (`payable`, command `sell`) | U | Sells the CS paid into bids from the highest price; see [§5.5](#55-incoming-cs-payable) |
 
 #### Rewards and governance
@@ -483,7 +485,7 @@ For deposit `(id, to, A, maxCsPrice)`:
 3. Take asks from the lowest price, oldest first, not above `maxCsPrice` if set (no other price
    limit, decision D1), spending at most `budget`
    including the swap fee, at most 50 fills.
-4. Mint `A`: `fee` and the swap fee to `buybackFund`, the cUSDT paid to the sellers' balances,
+4. Mint `A`: `fee` and the swap fee to `buybackFund`, the csUSDT paid to the sellers' balances,
    the rest to `to`; CS bought to `csClaimable[to]`.
 5. Mark the id minted; update `mintedBelow`/`mintedAbove`.
 
@@ -518,7 +520,7 @@ participation ([§8.4](#84-fees-buyback-and-rewards)).
 
 ### 5.9 Order matching
 
-- Asks by price ascending then id; bids by price descending then id. Tick 10⁻⁸ cUSDT.
+- Asks by price ascending then id; bids by price descending then id. Tick 10⁻⁸ csUSDT.
 - A buyer pays `qty × price` per fill, rounded up to 8 decimals, plus `swapFee` of the total,
   rounded up. CS quantities are rounded down to 6 decimals. A fill that would give less than
   0.000001 CS stops the order.
@@ -527,7 +529,7 @@ participation ([§8.4](#84-fees-buyback-and-rewards)).
   the 7-day VWAP uses the last 7 complete days.
 - At most 50 fills per call; the rest of the order is returned unspent.
 - The founder phase closes at the first single `buy` (not a conversion, not the buyback) in which
-  the buyer paid ≥ 100 cUSDT in total and the buyer differs from every seller filled; or 6 months
+  the buyer paid ≥ 100 csUSDT in total and the buyer differs from every seller filled; or 6 months
   after the contract reached `Normal` (N12); or when there are 7 active relayers; whichever comes
   first.
 
@@ -539,7 +541,7 @@ Computed when `applyRelayer` is called and fixed for that relayer:
   USDT part is enforced by the vault after its deploy, [§5.14](#514-bootstrap));
 - otherwise: CS in `bondCs` plus USDT on the vault (at least 50) such that
   `bondCs × entryPrice + bondUsdtOnBsc ≥ R` and `bondCs × entryPrice ≥ R / 2`, with
-  `R = max(1000, newBondRate × vaultView.userUsdt)` (decision D6: no cUSDT; decision D8: at least
+  `R = max(1000, newBondRate × vaultView.userUsdt)` (decision D6: no csUSDT; decision D8: at least
   half of the value in CS),
   where `entryPrice = min(conservativePrice, 7-day VWAP)` (H5).
 
@@ -613,7 +615,7 @@ harness).
 (underspecified 15; decision D7, 2026-11-06) One person deploys, nobody holds privileges, and the
 bridge starts only with at least 3 relayers.
 
-1. **Deploy on Credits.** Anyone (in practice one project member) deploys `CusdtBridge` with no
+1. **Deploy on Credits.** Anyone (in practice one project member) deploys `CsUsdtBridge` with no
    relayers, no owner and no constructor privileges. It starts in state `Bootstrap`: no mints, no
    burns, no orders; only the methods of the bootstrap table in
    [§5.12](#512-methods-by-contract-state).
@@ -810,7 +812,7 @@ Every cursor and record is written to the store before the corresponding action 
 
 ### 7.5 Watchdog, every cycle
 
-Invariant I1: `cUSDT totalSupply + Σ net amounts of withdrawals not claimed on the vault ≤
+Invariant I1: `csUSDT totalSupply + Σ net amounts of withdrawals not claimed on the vault ≤
 userUsdt`. Bonds and the reserve are counted apart. Also: no mint without a matching finalized
 deposit; no claimed withdrawal id without a Credits record with the same hash; vault signer set
 equal to the Credits active set (after the latest update); queued claims on the vault match
@@ -871,7 +873,7 @@ contracts treat as a duplicate.
    contract (for example ×2, N11); 0 means no limit and is the user's explicit choice (D1).
 2. Each relayer, after finality (≈ 1 s), calls `approveMint(id, to, 100, 0.03, txHash, version)`.
 3. At `T` approvals for the same data: fee 0.05 to the fund; conversion budget = 2 % × 99.95 =
-   1.999 cUSDT; CS bought from the lowest asks to `csClaimable[to]`; the rest credited as cUSDT.
+   1.999 csUSDT; CS bought from the lowest asks to `csClaimable[to]`; the rest credited as csUSDT.
 4. A relayer calls `deliverCs(to)`: the CS reach the user's wallet.
 5. Approvals after the mint return `done` and count for participation within 10 minutes.
 
@@ -886,13 +888,13 @@ contracts treat as a duplicate.
 ### 8.3 Swap
 
 - Ask: Carol sends 10,000 CS with user data `ask|0.01` → ask id.
-- Buy: Alice calls `buy(101, 0)`; she pays 100 cUSDT to Carol's balance plus 0.1 fee to the fund;
+- Buy: Alice calls `buy(101, 0)`; she pays 100 csUSDT to Carol's balance plus 0.1 fee to the fund;
   10,000 CS go to her `csClaimable`; she calls `claimCs()`.
 - Bid and sell are the mirror image, with the fee taken from the seller's proceeds.
 
 ### 8.4 Fees, buyback and rewards
 
-1. Bridge fees and swap fees accumulate in `buybackFund` (cUSDT).
+1. Bridge fees and swap fees accumulate in `buybackFund` (csUSDT).
 2. **Epoch bookkeeping.** An epoch is 7 days = 168 hour slots of block time. At the first
    state-changing call after an epoch ends (whether or not `closeEpoch()` has run), the contract
    rolls the epoch: `epochStart` advances by whole epochs, `epochFund` = the whole of
@@ -1018,7 +1020,7 @@ the signing depth):
    signatures; the vault pays from `reserveOf[nodeWallet]` only.
 5. **"Pro rata" for a reimbursement** means pro rata to the unpaid withdrawals at the time of
    the shortfall: withdrawals recorded on Credits and not claimed on the vault, which are bounded
-   and cannot be inflated by moving cUSDT between wallets.
+   and cannot be inflated by moving csUSDT between wallets.
 6. A `Slashed` record stays until 30 days after the slash and until no reserve proposal
    concerning it is open; it is then compacted into `signerHistory` (N10).
 
@@ -1071,8 +1073,8 @@ withdrawals, so a false alarm never locks users out.
    before its block is minted (H6, I13).
 4. `burnForBsc` stays open; asks and bids are refunded on cancel. The buyback stops at the
    block. The next `closeEpoch()` allocates the CS already bought and, once, the remaining
-   `buybackFund` in cUSDT, with the same split, credited to the owners' and payees' balances, so
-   that no stranded cUSDT keeps `totalSupply` above the 1 % end-of-life threshold.
+   `buybackFund` in csUSDT, with the same split, credited to the owners' and payees' balances, so
+   that no stranded csUSDT keeps `totalSupply` above the 1 % end-of-life threshold.
 5. End of life (H7): relayers stay bound for at least 12 months after the block, and bonds stay
    locked until the later of 12 months and the time `totalSupply + unpaid withdrawals` falls
    below 1 % of its value at the block, at most 24 months. After that, `withdrawBond` opens and
@@ -1124,12 +1126,12 @@ withdrawals, so a false alarm never locks users out.
 
 ## 10. Invariants
 
-1. `totalSupply(cUSDT) + Σ unpaid withdrawals ≤ userUsdt(vault)` (unpaid = recorded on Credits,
+1. `totalSupply(csUSDT) + Σ unpaid withdrawals ≤ userUsdt(vault)` (unpaid = recorded on Credits,
    not claimed on the vault, net amounts). Equality minus deposits in flight.
 2. A deposit id is minted at most once; a minted id never changes data.
 3. A withdrawal id is paid at most once; it is paid only with data equal to the Credits record
    (assuming fewer than `T` dishonest signers).
-4. `CS balance of CusdtBridge ≥ csLiabilities` (asks escrow + bonds + claimables + slash reserve +
+4. `CS balance of CsUsdtBridge ≥ csLiabilities` (asks escrow + bonds + claimables + slash reserve +
    dust).
 5. `Σ balances + Σ bid escrow + buybackFund = totalSupply` (`epochFund` is part of `buybackFund`).
 6. `USDT balance of vault ≥ userUsdt + Σ bondUsdt + reserveUsdt`.
@@ -1172,18 +1174,18 @@ withdrawals, so a false alarm never locks users out.
 | Applicant rejection | more than half of active relayers attest ineligible (acceptance at `T`) | code | — |
 | Cancel an application | 7 days after applying | code | — |
 | Bootstrap | ≥ 3 founders; eligible when attested by more than half of the other applicants; link by more than half of active founders | code | — |
-| Founder phase end (Credits) | first buy ≥ 100 cUSDT between distinct wallets, 6 months after `Normal`, or 7 relayers | code | — |
+| Founder phase end (Credits) | first buy ≥ 100 csUSDT between distinct wallets, 6 months after `Normal`, or 7 relayers | code | — |
 | Founder cap rule (vault) | `cap ≤ 20,000 USDT` while `foundersInSet() ≥ threshold()` | code | — |
 | Whitelist fallback | 30 days below 2 founders in the set | code | — |
 | Vault cap | 10,000 USDT | vote + `T` | ≤ 20,000 while founders reach `T`; after, ≤ Σ `bondCs` of the smallest `T`-set × conservative price; increases ×2 max per 7 days |
 | Conservative CS price | 0 until set by vote (a cap above the founder limit needs it set) | vote | lowering immediate, raising after 7 days, at most ×2 per 7 days |
 | Daily claim cap (rolling 24 h) | 2,000 USDT | vote + `T` | ≤ cap / 5; increases after 7 days |
 | Large-claim threshold / delay | 1,000 USDT per rolling 24 h without whitelist majority / 24 h | code | — |
-| Minimum deposit / withdrawal | 5 USDT / 5 cUSDT | vote | ≥ 1; `minWithdrawal ≥ bridgeFee + 1` (L3) |
-| Bridge fee | 0.05 cUSDT per direction | vote | ≤ 1 cUSDT |
+| Minimum deposit / withdrawal | 5 USDT / 5 csUSDT | vote | ≥ 1; `minWithdrawal ≥ bridgeFee + 1` (L3) |
+| Bridge fee | 0.05 csUSDT per direction | vote | ≤ 1 csUSDT |
 | Swap fee | 0.1 % (taker) | vote | ≤ 1 % |
-| Conversion at mint | 2 %, min 1, max 20 cUSDT | vote | rate ≤ 10 %, max ≤ 100 cUSDT |
-| Order limits | min 10 CS / 0.10 cUSDT; ≤ 20 per wallet; ≤ 2,000 total | code | — |
+| Conversion at mint | 2 %, min 1, max 20 csUSDT | vote | rate ≤ 10 %, max ≤ 100 csUSDT |
+| Order limits | min 10 CS / 0.10 csUSDT; ≤ 20 per wallet; ≤ 2,000 total | code | — |
 | Reward epoch / participation | 7 days / 80 % | code | — |
 | Owner share of rewards | 20 % | vote | ≤ 50 % |
 | Paid delegators per relayer | 100 | code | — |
@@ -1246,7 +1248,7 @@ probe today), mixed executors (`EXECUTOR_JAR_ALT`):
 - the TO VERIFY items of [§13.2](#132-to-verify);
 - deploy, mints, burns, swaps, payable commands, `deliverCs`, state identical on all nodes;
 - a node restarting and resyncing through all of it (`RESTART_AT`), with re-execution on;
-- the token API (`tokens_cache=true`) showing cUSDT balances.
+- the token API (`tokens_cache=true`) showing csUSDT balances.
 
 ### 12.3 BSC testnet
 
@@ -1337,7 +1339,7 @@ emitted amounts and failed-call reporting are verified in [§13.1](#131-verified
 4. How the API reports failed `approveMint` and `burnForBsc` calls to relayers and users.
 5. Credits reorganisation depths observed on mainnet, to set `creditsConfirmations`.
 6. Performance at the bounds of [§5.11](#511-bounded-state-and-work) on both executors.
-7. The token cache shows cUSDT balances after mints, burns, fills and internal moves.
+7. The token cache shows csUSDT balances after mints, burns, fills and internal moves.
 
 ---
 
@@ -1351,8 +1353,8 @@ These need a decision by the project owner. Until then the text follows the curr
 | D2 | Single-relayer pause (H2, former §14.3) | **Decided 2026-11-06.** Withdrawals below 1,000 USDT continue during a pause, within the daily cap; one pause per relayer per 7 days; an unfounded pause makes the pauser `Inactive` for 30 days ([§8.9](#89-pause-and-unpause)) | — | — |
 | D3 | Objection during the 7-day wait (M6) | **Decided 2026-11-06: removed.** Admission is automatic; only a `T` attestation of ineligibility rejects an applicant | — | — |
 | D4 | Use of the slash reserve | **Decided 2026-11-06.** Never used at once; 30-day appeal window for the slashed relayer; any use (return after a successful appeal, users' reimbursement, prover's share) only by a two-thirds vote of active relayers ([§8.8](#88-slashing-by-proof)) | — | — |
-| D5 | Provisional values | **Confirmed 2026-11-06.** As in the text | — | Bids in the book (yes); taker pays 0.1 % also on the conversion at mint, not on the buyback; owner share 20 % and the 100 largest delegators; participation 80 %; new-entrant bond: CS plus USDT on the vault (at least 50), no cUSDT (D6); initial vault cap 10,000 (hard 20,000 while founders reach `T`); daily cap 2,000 rolling (≤ cap / 5, was 5,000 per UTC day); minimum 5 USDT; prover share 10 % |
-| D6 | Bond assets (C2) | **Decided 2026-11-06.** CS on Credits plus USDT on the vault (at least 50) for the required value; no cUSDT; only CS counts for the cap bound | — | — |
+| D5 | Provisional values | **Confirmed 2026-11-06.** As in the text | — | Bids in the book (yes); taker pays 0.1 % also on the conversion at mint, not on the buyback; owner share 20 % and the 100 largest delegators; participation 80 %; new-entrant bond: CS plus USDT on the vault (at least 50), no csUSDT (D6); initial vault cap 10,000 (hard 20,000 while founders reach `T`); daily cap 2,000 rolling (≤ cap / 5, was 5,000 per UTC day); minimum 5 USDT; prover share 10 % |
+| D6 | Bond assets (C2) | **Decided 2026-11-06.** CS on Credits plus USDT on the vault (at least 50) for the required value; no csUSDT; only CS counts for the cap bound | — | — |
 | D7 | Who deploys the contracts, and the initial founders | **Decided 2026-11-06.** One person deploys, with no privileges; the bridge activates only with at least 3 eligible founders, who attest each other ([§5.14](#514-bootstrap)) | — | — |
 | D8 | Minimum CS share in a new entrant's bond (N1) | **Decided 2026-11-06.** At least half of the required value in CS (`bondCs × entryPrice ≥ R / 2`), the rest CS or USDT on the vault (≥ 50); the activation check (I18) stays | — | — |
 | D9 | Escalation of a pause (N2) | **Decided 2026-11-06.** A second, distinct relayer pausing while a pause is open makes it a full pause on that chain (small burns and claims stop); both pausers bear the pause limits ([§8.9](#89-pause-and-unpause)) | — | — |
@@ -1371,8 +1373,14 @@ hand-built transactions. To be designed after the spec is approved:
   reward claims (`claimCs`) and the return address.
 - **Swap and bridge page** for users: deposit and withdrawal with the claim of the signatures,
   the order book (asks and bids), placing and cancelling orders, the CS to claim.
+- Both pages and the wallet warn about look-alike tokens on BSC, which are not part of the
+  bridge: the "Credits"/`CS` token announced in March 2024 (`0xA0275960a6F107A97397D8aDdDa16c779bA491fE`,
+  whole supply held by one owner wallet with mint, blacklist and stop powers, no PancakeSwap
+  pair), and an unrelated fee-on-transfer token named `CS` (`0xf5ba9667ec716e35f5c7dd23d714ae62dc60f276`,
+  210 billion supply, PancakeSwap USDT/CS pair `0xc22b9a849066f6ed5818c354fd2897bea4bb961e`).
+  Checked on BSC on 2026-11-06.
 - The Credits wallet (`CreditsCommunity/wallet`) is maintained by another agent; what the bridge
-  needs there (cUSDT display, contract calls with user data, the votes above) is to be
+  needs there (csUSDT display, contract calls with user data, the votes above) is to be
   requested from the project owner, not changed from this repository.
 
 ## 15. Review findings and where they are addressed

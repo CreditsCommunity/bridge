@@ -1690,29 +1690,32 @@ must lie between 0.019 and 0.024.
 | Step | What happens | USDT (BSC) | csUSDT (Credits) | CS (Credits) |
 |---|---|---|---|---|
 | 1 | Bob sends 50,000 CS to the contract with the note `ask 0.020` | — | — | Bob → contract escrow: 50,000 |
-| 2 | Alice calls `deposit(100 USDT, her Credits wallet)` on the vault: deposit id 0 | Alice → vault: 100 | — | — |
+| 2 | Alice calls `deposit(100 USDT, her Credits wallet)` on the vault and adds the gas fee of 0.0001 BNB: deposit id 0 | Alice → vault: 100; Alice → gas pool: 0.0001 BNB | — | — |
 | 3 | R1 and R2 read deposit 0 in a finalized block and send `approveMint`. R3 is offline. Two approvals = `T`: the contract mints | — | 100 minted: 0.05 fee → fund; 1.999 spent on Alice's conversion | — |
 | 3a | The conversion buys from Bob's ask at 0.020 | — | ≈ 1.997 → Bob; ≈ 0.002 swap fee → fund; ≈ 97.95 → Alice | escrow → Alice (claimable): ≈ 99.85 |
 | 4 | R3 comes back and approves deposit 0: answer `done`, nothing happens | — | — | — |
 | 5 | Alice calls `claimCs()`: she now has CS to pay Credits fees | — | — | contract → Alice's wallet: ≈ 99.85 |
-| 6 | Carol deposits 500 USDT (id 1); R2 and R3 approve | Carol → vault: 500 | 500 minted: 0.05 → fund, ≈ 9.99 → Bob, ≈ 0.01 → fund, ≈ 489.95 → Carol | escrow → Carol: ≈ 499.45 |
+| 6 | Carol deposits 500 USDT (id 1) with the 0.0001 BNB gas fee; R2 and R3 approve | Carol → vault: 500; Carol → gas pool: 0.0001 BNB | 500 minted: 0.05 → fund, ≈ 9.99 → Bob, ≈ 0.01 → fund, ≈ 489.95 → Carol | escrow → Carol: ≈ 499.45 |
 | 7 | Carol calls `buy` for 10,000 CS at up to 0.020 | — | Carol → Bob: 200; Carol → fund: 0.20 | escrow → Carol: 10,000 |
 | 8 | Bob calls `burnForBsc(200, 0xBob)`: withdrawal id 0 | — | 0.05 → fund; 199.95 burned | — |
 | 9 | Once the burn is 10 blocks deep (≈ 13 s), R1 and R3 sign `Claim(id 0, 0xBob, 199.95)` and publish the signatures | — | — | — |
 | 10 | Bob opens the claim page, which collects 2 signatures, and sends `claim` on BSC. 199.95 is below 1,000: paid at once | vault → Bob: 199.95 | — | — |
 
-**After step 10.**
+| 11 | R2 rotates its BSC signing key. The three relayers sign the new signer list; R1's software sends it to the vault first, paying the gas, and the vault refunds it from the gas pool (≈ 0.00002 BNB, an estimate to be measured on BSC testnet) | gas pool → R1's BSC wallet: ≈ 0.00002 BNB | — | — |
+
+**After step 11.**
 
 | Who | USDT (BSC) | csUSDT | CS |
 |---|---|---|---|
 | Vault (users' USDT) | 400.05 | — | — |
+| Vault gas pool | ≈ 0.00018 BNB | — | — |
 | Alice | — | ≈ 97.95 | ≈ 99.85 |
 | Carol | — | ≈ 289.75 | ≈ 10,499.45 |
 | Bob | +199.95 | ≈ 11.99 | ask left: ≈ 39,400.70 in escrow |
 | Fee fund | — | ≈ 0.36 | — |
 | **csUSDT in circulation** | | **400.05** | |
 
-The main invariant holds: 400.05 csUSDT in circulation = 400.05 USDT of users in the vault.
+The main invariant holds: 400.05 csUSDT in circulation = 400.05 USDT of users in the vault. The gas pool is BNB kept apart; it only pays refunds for updates sent to the vault.
 
 **Rewards at the end of the epoch.** In every hour slot the contract (`buybackTick`, called by the
 relayers) spends 1/168 of the epoch's fund on the lowest asks, here Bob's. With a fund of 0.36
@@ -1722,7 +1725,7 @@ approval and its hourly digests count). Each share goes 20 % to the relayer's ow
 its delegators in proportion to their delegation. With more traffic the same rule gives
 proportionally more.
 
-**What each actor needed.** Alice and Carol: BNB for the BSC gas of `deposit`; no CS beforehand,
+**What each actor needed.** Alice and Carol: BNB for the BSC gas of `deposit` and the 0.0001 BNB gas fee; no CS beforehand,
 the conversion gave them some. Bob: CS for his ask and his burn, BNB for the `claim`. Relayers: a
 little CS for each approval (≈ 0.02 CS), nothing for signatures.
 

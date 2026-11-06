@@ -889,7 +889,7 @@ duplicates; every signer MUST be in the current signer set.
 | `reclaimBond(nodeWallet)` | anyone | No signatures: `bondSigner[nodeWallet]` not a signer, `removedAt + 60 days` passed and no `slashBond` applied; pays the whole `bondUsdt[nodeWallet]` to `bondReturn[nodeWallet]`. So a bond comes back even if the remaining relayers withhold their signatures; a slash proven on Credits has 60 days to reach the vault |
 | `slashBond(BondSlash, sigs)` | anyone | `threshold()` signatures; moves the bond to `reserveUsdt` / `reserveOf` |
 | `useReserve(ReserveUse, sigs)` | anyone | `unpauseThreshold()` signatures (mirrors the two-thirds vote, N4); signed by relayers only after the Credits reserve-use proposal executed; `amount ≤ reserveOf[nodeWallet]`; pays `to` from the reserve, never from `userUsdt` or other bonds |
-| `pause(Pause, sig)` / `pauseDirect()` | one signer | `deadline` not passed (L6); limits of [§8.9](#89-pause-and-unpause) |
+| `pause(Pause, sig)` | anyone, with one signer's signature | `deadline` not passed (L6); limits of [§8.9](#89-pause-and-unpause). The signer signs, its gas wallet (or anyone) submits: the signer key never needs BNB |
 | `unpause(Unpause, sigs)` | anyone | `unpauseThreshold()` signatures |
 | `block(Block, sigs)` | anyone | `threshold()` signatures. Sets `withdrawOnly` forever; records `blockedDepositId = nextDepositId` |
 | `setMigration(Migration, sigs)` | anyone | `threshold()` signatures; only while `withdrawOnly`; effective after 7 days; target a contract |
@@ -1010,7 +1010,7 @@ consumed the slot yet (the slot also runs lazily at the start of any state-chang
   | Node wallet | Credits | the delegations it receives; CS for the bond | offline when possible | registering, rotating keys, leaving, withdrawing the CS bond |
   | Operator key | Credits | a little CS (≈ 0.02 CS per approval) | relayer server | `approveMint`, attestations, digests, votes, `buybackTick`, pause |
   | BSC signer (`bscSigner`) | BSC | none | relayer server | EIP-712 signatures only (claims, signer sets, caps, pause, bond release and slash); signing costs nothing |
-  | BSC gas wallet | BSC | a little BNB (≈ 0.01 BNB, to be measured on testnet) | relayer server or operator's machine | sending transactions that someone must pay for: `depositBond`, submitting signed updates (`updateSigners`, `setCap`, `slashBond`, `useReserve`, unpause), `pauseDirect`, `reclaimBond` |
+  | BSC gas wallet | BSC | a little BNB (≈ 0.01 BNB, to be measured on testnet) | relayer server or operator's machine | sending transactions that someone must pay for: `depositBond`, submitting signed updates (`updateSigners`, `setCap`, `slashBond`, `useReserve`, unpause, `releaseBond`), its own `Pause` signature, `reclaimBond` |
   | Bond return address (`returnTo`) | BSC | receives the USDT bond back | offline | fixed at the first `depositBond`; never used to sign |
 
 - The BSC signer MUST NOT hold funds and MUST differ from the gas wallet and from `returnTo`.
@@ -1202,7 +1202,7 @@ Decision D2 (2026-11-06): a pause started by one relayer stops everything except
 withdrawals, so a false alarm never locks users out.
 
 - Any relayer pauses Credits (`pause`) and BSC (`Pause` signature with a deadline of at most 1
-  hour, or `pauseDirect`). While paused, the methods of [§5.12](#512-methods-by-contract-state)
+  hour, submitted by the relayer's gas wallet or by anyone). While paused, the methods of [§5.12](#512-methods-by-contract-state)
   apply. Small withdrawals continue: on Credits `burnForBsc` stays open for a net amount below
   `delayThreshold` (1,000 USDT); relayers sign those withdrawals only while their own watchdog
   passes (N9); on BSC a claim is paid only under the exact paused rule of

@@ -4,7 +4,7 @@ Status: draft, revision 3 (2026-11-06), after the security review in
 [reviews/2026-11-06-spec-security-review.md](reviews/2026-11-06-spec-security-review.md) and the
 re-review of the owner's decisions in
 [reviews/2026-11-06-decisions-re-review.md](reviews/2026-11-06-decisions-re-review.md). All
-decisions D1–D11 are taken ([§14](#14-open-decisions)). Awaiting the owner's approval; no code is
+decisions D1–D12 are taken ([§14](#14-open-decisions)). Awaiting the owner's approval; no code is
 written against it yet.
 
 This document specifies a bridge that carries USDT from BNB Smart Chain (BSC) to the Credits
@@ -112,6 +112,7 @@ values of [§11](#11-parameters).
 | **Attestation** | A relayer's statement on Credits of a fact the contract cannot read itself (eligibility, vault values, the vault address); it counts when `T` relayers attest the same value. |
 | **Digest** | An hourly fingerprint of what a relayer sees on both chains; a relayer that differs from the majority gets a **divergence mark**. |
 | **Participation** | Share of the epoch's approvals and digests a relayer took part in; at least 80 % to earn rewards, below 50 % in 14 days it becomes inactive. |
+| **Exit** | `leave()` on Credits; the vault drops the key; 30 days later the CS bond comes back with `withdrawBond`/`claimCs` and the USDT bond with `releaseBond` (relayers' signatures) or, from 60 days, `reclaimBond` (no signatures) to the BSC address fixed when the bond was paid. |
 | **Inactive** | A relayer temporarily out of the active set (offline, divergent, delegations below 1M); reversible, no loss of bond. |
 | **Version hash** | The hash of an admitted relayer software build; approvals from builds not admitted are refused. |
 | **Founder** | A relayer that applied before the founder phase closed; it keeps the founder bond (100k CS + 50 USDT) for good. |
@@ -780,7 +781,7 @@ bridge starts only with at least 3 relayers.
    its bond back 7 days after applying.
 4. **Vault deploy.** The vault is deployed after that. Its constructor takes the founders as
    `(signer, nodeWallet)` pairs equal to the active set recorded on Credits (anyone can check this
-   before using it). Each founder then deposits its 50 USDT with `depositBond(nodeWallet, …)`. The
+   before using it). Each founder then deposits its 50 USDT with `depositBond(nodeWallet, signer, returnTo, …)`. The
    vault refuses deposits while it has fewer than 3 signers or while a founder that is a signer
    (`foundersInSet()`) has less than 50 USDT of bond (N8).
 5. **Link.** More than half of the active founders attest `link` (vault address, BSC chain id,
@@ -830,7 +831,7 @@ contract address (informational).
 | `foundersBelowTwoSince` | Time `foundersInSet()` fell below 2 (0 otherwise) |
 | `nextDepositId` | Sequential |
 | `userUsdt` | User funds: deposits − claims − migrations |
-| `bondUsdt[bytes32 nodeWallet]`, `bondSigner[bytes32]` | Relayer bonds apart from user funds, and the signer key of each bond |
+| `bondUsdt[bytes32 nodeWallet]`, `bondSigner[bytes32]`, `bondReturn[bytes32]` | Relayer bonds apart from user funds, the signer key of each bond, and the BSC address the bond returns to, fixed at the first deposit |
 | `reserveUsdt`, `reserveOf[bytes32 nodeWallet]` | Slashed USDT bonds, in total and per slashed relayer |
 | `claimed[uint64]` | Withdrawal ids paid or queued |
 | `queue` | FIFO of queued claims `(id, to, amount, kind, creditsTo, fallback, unlockTime)` |
@@ -883,8 +884,9 @@ duplicates; every signer MUST be in the current signer set.
 | `requestFounderRemoval(FounderRemoval, sigs)` | anyone | Signed by the founder alone: immediate. Signed by `threshold()` instead: effective after 30 days unless cancelled by a majority of founders |
 | `setWhitelist(Whitelist, sigs)` | anyone | Normal mode: a majority of `foundersInSet()`, immediate. Fallback mode (`foundersBelowTwoSince` older than 30 days): more than half of all signers, effective after 7 days |
 | `setCap(Cap, sigs)` | anyone | `threshold()` signatures. Decreases immediate. Increases after 7 days, at most ×2 per step, for `cap` and `dailyCap` both. Always `dailyCap ≤ cap / 5`. While `foundersInSet() ≥ threshold()`: `cap ≤ 20,000 USDT` (H4) |
-| `depositBond(nodeWallet, signer, amount)` | relayer | Adds to `bondUsdt[nodeWallet]`, records `bondSigner`; not counted in `userUsdt` or the cap |
-| `releaseBond(BondRelease, sigs)` | anyone | `threshold()` signatures; `bondSigner[nodeWallet]` not a signer and `removedAt + 30 days` passed (C2, L9); pays `to` |
+| `depositBond(nodeWallet, signer, returnTo, amount)` | relayer | Adds to `bondUsdt[nodeWallet]`, records `bondSigner`; the first deposit fixes `bondReturn[nodeWallet] = returnTo` (non-zero, not the vault), later deposits must repeat the same address; not counted in `userUsdt` or the cap |
+| `releaseBond(BondRelease, sigs)` | anyone | `threshold()` signatures; `bondSigner[nodeWallet]` not a signer and `removedAt + 30 days` passed (C2, L9); pays `bondReturn[nodeWallet]` (the message's `to` must equal it) |
+| `reclaimBond(nodeWallet)` | anyone | No signatures: `bondSigner[nodeWallet]` not a signer, `removedAt + 60 days` passed and no `slashBond` applied; pays the whole `bondUsdt[nodeWallet]` to `bondReturn[nodeWallet]`. So a bond comes back even if the remaining relayers withhold their signatures; a slash proven on Credits has 60 days to reach the vault |
 | `slashBond(BondSlash, sigs)` | anyone | `threshold()` signatures; moves the bond to `reserveUsdt` / `reserveOf` |
 | `useReserve(ReserveUse, sigs)` | anyone | `unpauseThreshold()` signatures (mirrors the two-thirds vote, N4); signed by relayers only after the Credits reserve-use proposal executed; `amount ≤ reserveOf[nodeWallet]`; pays `to` from the reserve, never from `userUsdt` or other bonds |
 | `pause(Pause, sig)` / `pauseDirect()` | one signer | `deadline` not passed (L6); limits of [§8.9](#89-pause-and-unpause) |
@@ -1076,7 +1078,7 @@ contracts treat as a duplicate.
 
 ### 8.5 Relayer admission
 
-1. Node wallet pays the CS bond (`bond` command), and on BSC `depositBond(nodeWallet, signer, 50)`.
+1. Node wallet pays the CS bond (`bond` command), and on BSC `depositBond(nodeWallet, signer, returnTo, 50)`, `returnTo` being the BSC address its USDT bond will go back to.
 2. Node wallet calls `applyRelayer(...)`.
 3. Each relayer's software reads the candidate's delegations from its own node at the day's
    reference block (`DelegatedItem`: `wallet`, `sum`, `validUntil`, `fromTime`, `coeff`) and
@@ -1146,7 +1148,8 @@ state (C1):
    - `id` is in a compacted bucket and `merklePath` proves a different leaf for `id`.
 4. Then: status `Slashed`, out of the active set, a new signer set recorded; `bondCs` to the
    slash reserve (`proverShare`, 10 %, earmarked for the prover, see below); the relayers sign
-   `BondSlash` for the USDT bond on the vault, which moves it to `reserveUsdt`, subject to the
+   `BondSlash` for the USDT bond on the vault (their software does it at once: after 60 days the
+   slashed relayer could `reclaimBond`), which moves it to `reserveUsdt`, subject to the
    same appeal and two-thirds rule as the CS. The prover's wallet must
    not be the slashed relayer's.
 
@@ -1518,6 +1521,7 @@ These need a decision by the project owner. Until then the text follows the curr
 | D9 | Escalation of a pause (N2) | **Decided 2026-11-06.** A second, distinct relayer pausing while a pause is open makes it a full pause on that chain (small burns and claims stop); both pausers bear the pause limits ([§8.9](#89-pause-and-unpause)) | — | — |
 | D10 | Bootstrap protection (N6) | **Decided 2026-11-06: (a).** Operational defence only (publish the Credits address after the link, with the founders' node wallets; `activateBootstrap` callable only by an applicant). Owner's assessment: a takeover needs several strangers with 1M CS of one-year delegations each and gains nothing, so it is not expected; if it happens, the project redeploys and no user funds are at risk | — | — |
 | D11 | Price band (owner's proposal, 2026-11-06) | **Decided 2026-11-06.** Asks and bids within −5 % / +20 % of a daily reference price (previous day's VWAP of fills ≥ 100 csUSDT; the conservative price at the opening); anti-freeze decay after 3 idle days; all configurable by vote within hard caps ([§5.9](#59-order-matching)). Refines D1: free market inside the band | — | — |
+| D12 | Return of a relayer's USDT bond (owner, 2026-11-06) | **Decided 2026-11-06.** The BSC return address is fixed when the bond is first paid; after leaving, the bond is released with the relayers' signatures from 30 days, or by the relayer alone with `reclaimBond` from 60 days if no slash reached the vault ([§6.3](#63-methods)) | — | — |
 
 ---
 

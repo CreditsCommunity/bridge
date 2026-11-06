@@ -537,9 +537,10 @@ Computed when `applyRelayer` is called and fixed for that relayer:
 
 - founder phase open: 100,000 CS in `bondCs` **and** 50 USDT on the vault (in `Bootstrap` the
   USDT part is enforced by the vault after its deploy, [§5.14](#514-bootstrap));
-- otherwise: CS in `bondCs` plus USDT on the vault (at least 50), in any proportion, such that
-  `bondCs × entryPrice + bondUsdtOnBsc ≥ max(1000, newBondRate × vaultView.userUsdt)`
-  (decision D6: no cUSDT),
+- otherwise: CS in `bondCs` plus USDT on the vault (at least 50) such that
+  `bondCs × entryPrice + bondUsdtOnBsc ≥ R` and `bondCs × entryPrice ≥ R / 2`, with
+  `R = max(1000, newBondRate × vaultView.userUsdt)` (decision D6: no cUSDT; decision D8: at least
+  half of the value in CS),
   where `entryPrice = min(conservativePrice, 7-day VWAP)` (H5).
 
 A later rise of the requirement never applies to existing relayers. For the cap bound
@@ -1348,7 +1349,7 @@ These need a decision by the project owner. Until then the text follows the curr
 | D5 | Provisional values | **Confirmed 2026-11-06.** As in the text | — | Bids in the book (yes); taker pays 0.1 % also on the conversion at mint, not on the buyback; owner share 20 % and the 100 largest delegators; participation 80 %; new-entrant bond: CS plus USDT on the vault (at least 50), no cUSDT (D6); initial vault cap 10,000 (hard 20,000 while founders reach `T`); daily cap 2,000 rolling (≤ cap / 5, was 5,000 per UTC day); minimum 5 USDT; prover share 10 % |
 | D6 | Bond assets (C2) | **Decided 2026-11-06.** CS on Credits plus USDT on the vault (at least 50) for the required value; no cUSDT; only CS counts for the cap bound | — | — |
 | D7 | Who deploys the contracts, and the initial founders | **Decided 2026-11-06.** One person deploys, with no privileges; the bridge activates only with at least 3 eligible founders, who attest each other ([§5.14](#514-bootstrap)) | — | — |
-| D8 | Minimum CS share in a new entrant's bond (N1) | Any proportion of CS and USDT; activation refused when the cap bound would break (I18) | An entrant with a mostly-USDT bond adds little to the bound against a colluding threshold; the activation check already protects the cap, but it may refuse entrants unexpectedly | (a) keep any proportion with the activation check; (b) require `bondCs × entryPrice ≥ 50 %` of the requirement |
+| D8 | Minimum CS share in a new entrant's bond (N1) | **Decided 2026-11-06.** At least half of the required value in CS (`bondCs × entryPrice ≥ R / 2`), the rest CS or USDT on the vault (≥ 50); the activation check (I18) stays | — | — |
 | D9 | Escalation of a pause (N2) | A pause by one relayer keeps small withdrawals open (D2) | A coalition member can start the pause itself; small false claims continue at the normal rate | (a) keep D2 as is; (b) a second, distinct relayer pausing while a pause is open makes it a full pause (small claims stop), both pausers bearing the pause limits |
 | D10 | Bootstrap protection (N6) | No deployer privilege (D7); operational defence: publish the address only after the link, with the founders' wallets | Several strangers with real delegations can activate first; the project would redeploy | (a) keep the operational defence; (b) `activateBootstrap` not before deploy + 48 hours, so the intended founders can apply first; (c) a hash of the intended founders' node wallets in the deploy transaction's user data, checked at activation (reintroduces a deployer choice, without keys, fees or votes) |
 

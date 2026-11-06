@@ -585,7 +585,7 @@ After `Normal` is reached:
 |---|---|---|---|---|
 | `transfer`, `transferFrom`, `approve` | yes | yes | yes | yes |
 | `approveMint` | yes | no | yes, ids < `blockDepositLimit` once attested | same |
-| `burnForBsc` | yes | only net amounts below `delayThreshold` (D2); none during a `mint-mismatch` pause | yes | yes |
+| `burnForBsc` | yes | only net amounts below `delayThreshold` (D2); none during a full pause (`mint-mismatch` or a second distinct pauser, D9) | yes | yes |
 | `migrate` | — | no | — | yes |
 | `deliverCs`, `claimCs`, `setReturnAddress` | yes | yes | yes | yes |
 | `payable` `ask`/`sell`, `placeBid`, `buy` | yes | no | no | no |
@@ -687,7 +687,7 @@ contract address (informational).
 | `dailyCap`, `pendingDailyCap`, `pendingDailyCapTime` | Rolling 24-h claim cap |
 | `window` | Claims of the last 24 h, as hourly buckets (L4) |
 | `undelayedWindow` | Claims without a whitelist majority in the last 24 h, hourly buckets (H3) |
-| `paused`, `pausedBy`, `lastPauseBy[address]`, `withdrawOnly`, `blockedDepositId` | |
+| `paused`, `pausedBy`, `secondPauser`, `fullPause`, `lastPauseBy[address]`, `withdrawOnly`, `blockedDepositId` | `fullPause` set by a second distinct pauser (D9) |
 | `migrationTarget`, `migrationTime` | New vault, effective time |
 | `nonces[kind]` | Replay protection per message kind |
 
@@ -726,7 +726,7 @@ duplicates; every signer MUST be in the current signer set.
 | Method | Who | Rules |
 |---|---|---|
 | `deposit(amount, creditsTo, maxCsPrice)` | user | Not paused, not `withdrawOnly`; `signers.length ≥ 3` (L5); every founder in `foundersInSet()` has `bondUsdt[founderWallet] ≥ 50 USDT` (N8); `amount` multiple of 10¹⁰ and ≥ `minDeposit`; `creditsTo ≠ 0`; `userUsdt + amount ≤ cap`. Pulls USDT measuring the balance delta. Emits `Deposit(id, from, amount, creditsTo, maxCsPrice)` |
-| `claim(Claim, sigs)` | anyone | **While paused** (D2, N2): paid only if `kind = 0`, `amount < delayThreshold`, the H3 test passes (a whitelist majority among the signatures, or `undelayedWindow + amount ≤ delayThreshold`) and the rolling daily cap allows it; otherwise the call reverts, is not queued and does not mark `claimed`; both windows are updated as in normal mode. **Not paused:** not claimed; `threshold()` valid signatures; `kind 1` rules below. If the rolling daily cap would be exceeded, the claim is queued (M4) instead of reverting. If the signatures include fewer than `floor(W/2)+1` whitelisted signers (`W` = whitelisted members of the signer set; `W = 0` always counts as fewer) and `undelayedWindow + amount > delayThreshold`, it is queued for 24 h (H3). Else paid. Marks `claimed[id]` |
+| `claim(Claim, sigs)` | anyone | **While fully paused** (D9): refused. **While paused** (D2, N2): paid only if `kind = 0`, `amount < delayThreshold`, the H3 test passes (a whitelist majority among the signatures, or `undelayedWindow + amount ≤ delayThreshold`) and the rolling daily cap allows it; otherwise the call reverts, is not queued and does not mark `claimed`; both windows are updated as in normal mode. **Not paused:** not claimed; `threshold()` valid signatures; `kind 1` rules below. If the rolling daily cap would be exceeded, the claim is queued (M4) instead of reverting. If the signatures include fewer than `floor(W/2)+1` whitelisted signers (`W` = whitelisted members of the signer set; `W = 0` always counts as fewer) and `undelayedWindow + amount > delayThreshold`, it is queued for 24 h (H3). Else paid. Marks `claimed[id]` |
 | `executeQueued(count)` | anyone | Not paused; pays queued claims in FIFO order whose unlock time has passed, within the daily cap |
 | `updateSigners(SignerSet, sigs)` | anyone | `threshold()` of the current signers; `nonce = signerNonce + 1`; new set non-empty, sorted, ≤ 64; sets `removedAt` for removed signers; `foundersToAdd` only while not `foundersFrozen`, each in the new set; `freezeFounders` sets `foundersFrozen`. Founders leave the founder set only by their own `FounderRemoval` or a matured removal |
 | `requestFounderRemoval(FounderRemoval, sigs)` | anyone | Signed by the founder alone: immediate. Signed by `threshold()` instead: effective after 30 days unless cancelled by a majority of founders |
@@ -1042,11 +1042,16 @@ withdrawals, so a false alarm never locks users out.
   Deposits, mints, larger burns and claims, queued claims and `kind 1` (migration) claims stop.
 - The automatic `mint-mismatch` pause ([§5.7](#57-mint-approval-counting)) is a full pause on
   Credits: small burns stop too and relayers sign nothing.
+- **Escalation (decision D9).** While a pause is open, a second relayer, distinct from the first,
+  that also pauses turns it into a **full pause** on that chain: small burns and small claims stop
+  too, and relayers sign nothing. Both pausers bear the pause limits (7 days, bond lock extended,
+  `Inactive` if the pause is declared unfounded). Each contract records the pausers
+  (`pausedBy`, `secondPauser`, `fullPause`); on BSC the second `Pause` signature must come from a
+  different signer than the first. Unpause clears both levels with the same `U` rule.
 - Cost of this choice: a pause does not stop a colluding threshold; it is paid small false claims
   at the normal rate (1,000 USDT per 24 h without a whitelist majority, the daily cap with one)
   until the unpause decision or the proofs act. Any member of such a coalition may also start the
-  pause itself. The bounds are the daily cap and the vault cap. A stronger "second pauser makes
-  it full" rule is open decision D9. In exchange, an honest pause never locks users out: in a
+  pause itself. The bounds are the daily cap and the vault cap. In exchange, an honest pause never locks users out: in a
   stand-off (honest pauser, coalition below `U`) every user can still withdraw in pieces below
   1,000 USDT.
 - A relayer that paused cannot pause again for 7 days on either chain; its own bond lock is
@@ -1350,8 +1355,8 @@ These need a decision by the project owner. Until then the text follows the curr
 | D6 | Bond assets (C2) | **Decided 2026-11-06.** CS on Credits plus USDT on the vault (at least 50) for the required value; no cUSDT; only CS counts for the cap bound | — | — |
 | D7 | Who deploys the contracts, and the initial founders | **Decided 2026-11-06.** One person deploys, with no privileges; the bridge activates only with at least 3 eligible founders, who attest each other ([§5.14](#514-bootstrap)) | — | — |
 | D8 | Minimum CS share in a new entrant's bond (N1) | **Decided 2026-11-06.** At least half of the required value in CS (`bondCs × entryPrice ≥ R / 2`), the rest CS or USDT on the vault (≥ 50); the activation check (I18) stays | — | — |
-| D9 | Escalation of a pause (N2) | A pause by one relayer keeps small withdrawals open (D2) | A coalition member can start the pause itself; small false claims continue at the normal rate | (a) keep D2 as is; (b) a second, distinct relayer pausing while a pause is open makes it a full pause (small claims stop), both pausers bearing the pause limits |
-| D10 | Bootstrap protection (N6) | No deployer privilege (D7); operational defence: publish the address only after the link, with the founders' wallets | Several strangers with real delegations can activate first; the project would redeploy | (a) keep the operational defence; (b) `activateBootstrap` not before deploy + 48 hours, so the intended founders can apply first; (c) a hash of the intended founders' node wallets in the deploy transaction's user data, checked at activation (reintroduces a deployer choice, without keys, fees or votes) |
+| D9 | Escalation of a pause (N2) | **Decided 2026-11-06.** A second, distinct relayer pausing while a pause is open makes it a full pause on that chain (small burns and claims stop); both pausers bear the pause limits ([§8.9](#89-pause-and-unpause)) | — | — |
+| D10 | Bootstrap protection (N6) | **Decided 2026-11-06: (a).** Operational defence only (publish the Credits address after the link, with the founders' node wallets; `activateBootstrap` callable only by an applicant). Owner's assessment: a takeover needs several strangers with 1M CS of one-year delegations each and gains nothing, so it is not expected; if it happens, the project redeploys and no user funds are at risk | — | — |
 
 ---
 

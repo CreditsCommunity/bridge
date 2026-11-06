@@ -105,7 +105,7 @@ threshold of relayers unable to steal (see [§3](#3-trust-model)).
 | A new reward token | Value would have to come from the fees anyway; CS paid directly is simpler |
 | Mass transfer of funds for upgrades | The most valuable target for an attack; replaced by per-user migration |
 | Memo/tag on CS returns | The node drops user data on contract-emitted transactions ([§13.1](#131-verified)) |
-| cUSDT as bond collateral counted in the loss bound | A thief recovers it by draining the vault (C2); cUSDT and USDT bonds count for entry only, not for the cap bound |
+| cUSDT as bond collateral | Not accepted (decision D6): its value depends on the vault it should protect; bonds are CS on Credits and USDT on the vault, and only CS counts for the cap bound (C2) |
 
 ### 2.3 Decisions that changed since the analysis
 
@@ -321,7 +321,6 @@ contract state under a sequential id and exposed by `@Getter` methods:
 | `status` | `Applied`, `Active`, `Inactive`, `Exiting`, `Exited`, `Slashed`, `Rejected` |
 | `founder` | Applied while the founder phase was open |
 | `bondCs` | CS held by this contract |
-| `bondCusdt` | cUSDT locked in this contract (entry requirement only) |
 | `bondUsdtOnBsc` | USDT on the vault attested by `T` relayers (entry requirement only) |
 | `bondRequired` | Value required at entry, fixed |
 | `appliedAt`, `activatedAt`, `exitAt`, `removedFromVaultAt` | Times; `removedFromVaultAt` set from the attested vault signer-set nonce (C2) |
@@ -365,14 +364,13 @@ relayer concerned, **A** anyone. All amounts are `BigDecimal` (Variant `v_big_de
 
 | Method | Caller | Rules |
 |---|---|---|
-| `applyRelayer(operator, ownerWallet, bscSigner, signatureUrl, version)` | W | Not blocked; not already a relayer; `bscSigner` never registered before (M1); ≤ 64 non-exited relayers; bond already paid by the same wallet ([§5.5](#55-incoming-cs-payable) `bond`, and `lockCusdt`) covering `bondRequired` computed now ([§5.10](#510-bond-required-at-entry)); founder if the founder phase is open. Status `Applied` |
-| `lockCusdt(amount)` | W | Moves cUSDT from the caller's balance into its `bondCusdt` |
+| `applyRelayer(operator, ownerWallet, bscSigner, signatureUrl, version)` | W | Not blocked; not already a relayer; `bscSigner` never registered before (M1); ≤ 64 non-exited relayers; bond already paid by the same wallet ([§5.5](#55-incoming-cs-payable) `bond`, and `depositBond` on the vault attested as `bondUsdtOnBsc`) covering `bondRequired` computed now ([§5.10](#510-bond-required-at-entry)); founder if the founder phase is open. Status `Applied` |
 | `attest(period, kind, payload, version)` | R | Attestations of facts the contract cannot read ([§5.8](#58-attestations)): eligibility, payee lists, vault view, signer set applied, block limit, bond on BSC |
 | `activate(relayerId)` | A | After 7 days, eligibility and bond attested, not rejected, `N < 64`. Status `Active`; a new signer set is recorded |
 | `setOperator(op)`, `setSignatureUrl(url)`, `setOwnerWallet(w)`, `setReturnAddress(addr)` | W | Immediate |
 | `rotateSigner(bscSigner)` | W | New key never registered before; the old key stays in `signerHistory` and stays provable while any bond of this relayer is held; a new signer set is recorded |
 | `leave()` | W | Not paused (C1); status `Exiting`; a new signer set is recorded; `exitAt = now`, `exitNonce` = its nonce |
-| `withdrawBond()` | W | Not paused (C1); status `Exiting`, `Inactive`-and-leaving or `Rejected`; `now ≥ exitAt + 30 days + Σ pauses it started`; `vaultView` shows a signer set with nonce ≥ `exitNonce` applied on the vault and `now ≥ removedFromVaultAt + 30 days` (C2); if blocked, the end-of-life rule of [§8.10](#810-permanent-block-migration-and-end-of-life). Credits `bondCs` to `csClaimable`, `bondCusdt` to the balance; marks `Exited` |
+| `withdrawBond()` | W | Not paused (C1); status `Exiting`, `Inactive`-and-leaving or `Rejected`; `now ≥ exitAt + 30 days + Σ pauses it started`; `vaultView` shows a signer set with nonce ≥ `exitNonce` applied on the vault and `now ≥ removedFromVaultAt + 30 days` (C2); if blocked, the end-of-life rule of [§8.10](#810-permanent-block-migration-and-end-of-life). Credits `bondCs` to `csClaimable`; marks `Exited` (the USDT bond is released on the vault by `releaseBond`) |
 | `submitDigest(period, digestHash, version)` | R | Once per relayer per period ([§7.6](#76-state-digests)) |
 | `updateStatus(relayerId)` | A | Applies inactivity, delegation-drop and divergence rules ([§8.6](#86-inactivity-delegation-drop-divergence)) |
 | `proveFalseSignature(id, kind, to, amount, creditsTo, fallback, sigHex, merklePath)` | A | Every state (C1); [§8.8](#88-slashing-by-proof) |
@@ -507,8 +505,9 @@ to its owner wallet for that epoch. Payloads are capped at 4 KB.
 Computed when `applyRelayer` is called and fixed for that relayer:
 
 - founder phase open: 100,000 CS in `bondCs` **and** 50 USDT on the vault;
-- otherwise: 50 USDT on the vault, plus CS, cUSDT and/or more USDT such that
-  `bondCs × entryPrice + bondCusdt + bondUsdtOnBsc ≥ max(1000, newBondRate × vaultView.userUsdt)`,
+- otherwise: CS in `bondCs` plus USDT on the vault (at least 50), in any proportion, such that
+  `bondCs × entryPrice + bondUsdtOnBsc ≥ max(1000, newBondRate × vaultView.userUsdt)`
+  (decision D6: no cUSDT),
   where `entryPrice = min(conservativePrice, 7-day VWAP)` (H5).
 
 A later rise of the requirement never applies to existing relayers. For the cap bound
@@ -869,9 +868,9 @@ state (C1):
      record is older than `creditsConfirmations` blocks; or
    - `id` is in a compacted bucket and `merklePath` proves a different leaf for `id`.
 4. Then: status `Slashed`, out of the active set, a new signer set recorded; `bondCs` to the
-   slash reserve (`proverShare`, 10 %, earmarked for the prover, see below); `bondCusdt` burned
-   from supply and, since it is backed by vault USDT, the matching USDT moved to the vault reserve
-   by `T` signatures; the relayers sign `BondSlash` for the BSC bond. The prover's wallet must
+   slash reserve (`proverShare`, 10 %, earmarked for the prover, see below); the relayers sign
+   `BondSlash` for the USDT bond on the vault, which moves it to `reserveUsdt`, subject to the
+   same appeal and two-thirds rule as the CS. The prover's wallet must
    not be the slashed relayer's.
 
 **Slash reserve and appeal (decision D4).** Confiscated funds are never used at once, because a
@@ -977,7 +976,7 @@ withdrawals, so a false alarm never locks users out.
    (assuming fewer than `T` dishonest signers).
 4. `CS balance of CusdtBridge ≥ csLiabilities` (asks escrow + bonds + claimables + slash reserve +
    dust).
-5. `Σ balances + Σ bid escrow + buybackFund + Σ bondCusdt = totalSupply`.
+5. `Σ balances + Σ bid escrow + buybackFund = totalSupply`.
 6. `USDT balance of vault ≥ userUsdt + Σ bondUsdt + reserveUsdt`.
 7. User USDT leaves the vault only through `claim`/`executeQueued`.
 8. `T ≥ 2` on both chains; every governable parameter is within its hard cap.
@@ -1173,7 +1172,7 @@ These need a decision by the project owner. Until then the text follows the curr
 | D3 | Objection during the 7-day wait (M6) | **Decided 2026-11-06: removed.** Admission is automatic; only a `T` attestation of ineligibility rejects an applicant | — | — |
 | D4 | Use of the slash reserve | **Decided 2026-11-06.** Never used at once; 30-day appeal window for the slashed relayer; any use (return after a successful appeal, users' reimbursement, prover's share) only by a two-thirds vote of active relayers ([§8.8](#88-slashing-by-proof)) | — | — |
 | D5 | Provisional values | As in the text | — | Bids in the book (yes); taker pays 0.1 % also on the conversion at mint, not on the buyback; owner share 20 % and the 100 largest delegators; participation 80 %; new-entrant bond: 50 USDT on the vault, the rest in CS, cUSDT or USDT; initial vault cap 10,000 (hard 20,000 while founders reach `T`); daily cap 2,000 rolling (≤ cap / 5, was 5,000 per UTC day); minimum 5 USDT; prover share 10 % |
-| D6 | Bonds in cUSDT or USDT (C2) | New entrants may pay the CS value in USDT | They are recovered by a thief who drains the vault | In the text: they count for entry, not for the cap bound; alternatively accept only CS above the 50 USDT |
+| D6 | Bond assets (C2) | **Decided 2026-11-06.** CS on Credits plus USDT on the vault (at least 50) for the required value; no cUSDT; only CS counts for the cap bound | — | — |
 | D7 | Who deploys the contracts, and the initial founders | Not decided | — | — |
 
 ---

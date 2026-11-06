@@ -1,0 +1,22 @@
+<section id="a-withdraw" data-transition="fade" style="background:#F7F5EF;color:#14213D;font-family:Inter, Arial, sans-serif;padding:128px;display:flex;flex-direction:column;gap:40px">
+<h2 style="font-family:'Space Grotesk', Arial, sans-serif;font-size:72px;font-weight:700">Bob takes 200 dollars home</h2>
+<div style="display:flex;flex-direction:column;gap:20px">
+<div style="display:flex;flex-direction:row;align-items:center;gap:28px;background:#FFFFFF;border-radius:16px;padding:24px 32px">
+<p style="font-size:32px;font-weight:600;width:56px;color:#3A6EA5">8</p>
+<p style="flex:1;font-size:30px;line-height:1.35">Bob calls “burn for BSC” with 200 csUSDT and his BSC address: 0.05 to the fee fund, 199.95 destroyed, withdrawal no. 0 recorded.</p>
+<p style="font-size:26px;background:#3A6EA5;color:#F7F5EF;padding:8px 20px;border-radius:999px;white-space:nowrap">csUSDT: burned</p>
+</div>
+<div style="display:flex;flex-direction:row;align-items:center;gap:28px;background:#FFFFFF;border-radius:16px;padding:24px 32px">
+<p style="font-size:32px;font-weight:600;width:56px;color:#14213D">9</p>
+<p style="flex:1;font-size:30px;line-height:1.35">About 13 seconds later (10 Credits blocks), R1 and R3 sign “withdrawal 0: 199.95 to Bob” and publish their signatures. Signing costs nothing.</p>
+<p style="font-size:26px;background:#14213D;color:#F7F5EF;padding:8px 20px;border-radius:999px;white-space:nowrap">2 signatures</p>
+</div>
+<div style="display:flex;flex-direction:row;align-items:center;gap:28px;background:#FFFFFF;border-radius:16px;padding:24px 32px">
+<p style="font-size:32px;font-weight:600;width:56px;color:#1F8A70">10</p>
+<p style="flex:1;font-size:30px;line-height:1.35">Bob opens the claim page, which collects them, and sends the claim on BSC. Under 1,000 USDT: paid at once.</p>
+<p style="font-size:26px;background:#1F8A70;color:#F7F5EF;padding:8px 20px;border-radius:999px;white-space:nowrap">USDT: vault → Bob</p>
+</div>
+</div>
+<p style="font-size:28px;color:#3D4A63">The vault pays each withdrawal number only once, and only with the signatures of 2 of the 3 relayers.</p>
+<aside>Bob pays the BSC gas of his claim in BNB, and a small CS fee for the burn. The relayers never hold his money: they only sign what they see on Credits.</aside>
+</section>

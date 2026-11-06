@@ -1,0 +1,23 @@
+<section id="relayer-exit" data-transition="fade" style="background:#F7F5EF;color:#14213D;font-family:Inter, Arial, sans-serif;padding:128px;display:flex;flex-direction:column;gap:36px">
+<h2 style="font-family:'Space Grotesk', Arial, sans-serif;font-size:72px;font-weight:700">Leaving: getting the bond back</h2>
+<div style="display:flex;flex-direction:column;gap:18px">
+<div style="display:flex;flex-direction:row;align-items:center;gap:28px;background:#FFFFFF;border-radius:16px;padding:20px 32px">
+<p style="font-size:28px;font-weight:600;width:150px;color:#3A6EA5">Day 0</p>
+<p style="flex:1;font-size:30px;line-height:1.35">The relayer calls “leave” on Credits, signed also by its BSC wallet, and stops approving and signing.</p>
+</div>
+<div style="display:flex;flex-direction:row;align-items:center;gap:28px;background:#FFFFFF;border-radius:16px;padding:20px 32px">
+<p style="font-size:28px;font-weight:600;width:150px;color:#1F8A70">Hours</p>
+<p style="flex:1;font-size:30px;line-height:1.35">The other relayers update the vault’s signer list: its BSC key stops counting.</p>
+</div>
+<div style="display:flex;flex-direction:row;align-items:center;gap:28px;background:#FFFFFF;border-radius:16px;padding:20px 32px">
+<p style="font-size:28px;font-weight:600;width:150px;color:#14213D">30 days</p>
+<p style="flex:1;font-size:30px;line-height:1.35">Waiting time: any false signature it made can still be proven. Then the <b>CS</b> come back to its wallet, and the <b>USDT</b> with the relayers’ signatures.</p>
+</div>
+<div style="display:flex;flex-direction:row;align-items:center;gap:28px;background:#FFFFFF;border-radius:16px;padding:20px 32px">
+<p style="font-size:28px;font-weight:600;width:150px;color:#E07A1F">60 days</p>
+<p style="flex:1;font-size:30px;line-height:1.35">If the signatures never came, the relayer takes its <b>USDT</b> back alone, with no one’s permission.</p>
+</div>
+</div>
+<p style="font-size:28px;color:#3D4A63">The CS go to the safe Credits address the BSC wallet signed, the USDT to the BSC wallet: nobody can redirect them.</p>
+<aside>The CS part is released by the Credits contract itself after the 30 days. The USDT part is released on BSC: normally with the signatures of the remaining relayers, which their software gives automatically; if they are withheld, after 60 days the vault pays it without signatures. The only exception is a proven false signature: then the bond goes to the reserve, with 30 days to appeal.</aside>
+</section>

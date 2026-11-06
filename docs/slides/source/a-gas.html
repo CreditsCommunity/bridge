@@ -1,0 +1,22 @@
+<section id="a-gas" data-transition="fade" style="background:#F7F5EF;color:#14213D;font-family:Inter, Arial, sans-serif;padding:128px;display:flex;flex-direction:column;gap:40px">
+<h2 style="font-family:'Space Grotesk', Arial, sans-serif;font-size:72px;font-weight:700">A relayer uses the gas pool</h2>
+<div style="display:flex;flex-direction:column;gap:20px">
+<div style="display:flex;flex-direction:row;align-items:center;gap:28px;background:#FFFFFF;border-radius:16px;padding:24px 32px">
+<p style="font-size:32px;font-weight:600;width:56px;color:#1F8A70">11</p>
+<p style="flex:1;font-size:30px;line-height:1.35">The pool holds 0.0002 BNB: the fees of Alice’s and Carol’s deposits.</p>
+<p style="font-size:26px;background:#1F8A70;color:#F7F5EF;padding:8px 20px;border-radius:999px;white-space:nowrap">Pool: 0.0002 BNB</p>
+</div>
+<div style="display:flex;flex-direction:row;align-items:center;gap:28px;background:#FFFFFF;border-radius:16px;padding:24px 32px">
+<p style="font-size:32px;font-weight:600;width:56px;color:#14213D">12</p>
+<p style="flex:1;font-size:30px;line-height:1.35">R2 changes its signing key. R1, R2 and R3 sign the new signer list: signing is free.</p>
+<p style="font-size:26px;background:#14213D;color:#F7F5EF;padding:8px 20px;border-radius:999px;white-space:nowrap">3 signatures</p>
+</div>
+<div style="display:flex;flex-direction:row;align-items:center;gap:28px;background:#FFFFFF;border-radius:16px;padding:24px 32px">
+<p style="font-size:32px;font-weight:600;width:56px;color:#1F8A70">13</p>
+<p style="flex:1;font-size:30px;line-height:1.35">R1’s software sends it to the vault first and pays the gas; the vault refunds it from the pool.</p>
+<p style="font-size:26px;background:#1F8A70;color:#F7F5EF;padding:8px 20px;border-radius:999px;white-space:nowrap">Pool → R1: ≈ 0.00002 BNB</p>
+</div>
+</div>
+<p style="font-size:28px;color:#3D4A63">R1 is not out of pocket, and the update reaches the vault within minutes. About 0.00018 BNB stay in the pool for the next one.</p>
+<aside>The refund amount is an estimate, to be measured on BSC testnet. Only the first submission that changes something is refunded, with limits per call and per hour, so nobody can empty the pool by sending updates in a loop.</aside>
+</section>

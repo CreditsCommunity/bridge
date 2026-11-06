@@ -4,7 +4,7 @@ Status: draft, revision 3 (2026-11-06), after the security review in
 [reviews/2026-11-06-spec-security-review.md](reviews/2026-11-06-spec-security-review.md) and the
 re-review of the owner's decisions in
 [reviews/2026-11-06-decisions-re-review.md](reviews/2026-11-06-decisions-re-review.md). All
-decisions D1–D12 are taken ([§14](#14-open-decisions)). Awaiting the owner's approval; no code is
+decisions D1–D14 are taken ([§14](#14-open-decisions)). Awaiting the owner's approval; no code is
 written against it yet.
 
 This document specifies a bridge that carries USDT from BNB Smart Chain (BSC) to the Credits
@@ -101,18 +101,21 @@ values of [§11](#11-parameters).
 
 | Term | Meaning |
 |---|---|
-| **Relayer** | A Credits full node with the relayer software: it reads both chains, approves mints on Credits, signs withdrawals for BSC, and watches. It holds a Credits operator key with a little CS, a BSC signing key with no funds, and a small BSC gas wallet with BNB ([§7.8](#78-keys)). |
-| **Node wallet**, **owner wallet** | The wallet of the relayer's node, and the wallet of the person behind it (they receive the owner share of rewards). |
+| **Relayer** | A Credits full node with the relayer software: it reads both chains, approves mints on Credits, signs withdrawals for BSC, and watches. Its operator manages two wallets, the node wallet on Credits and a BSC wallet; the software adds a BSC signing key with no funds ([§7.8](#78-keys)). |
+| **Node wallet** | The relayer node's own Credits wallet (its key is on the server). It receives the delegations, pays and recovers the CS bond, sends the relayer's Credits transactions and receives the owner share of rewards (D14). |
+| **BSC wallet** | The BSC wallet the relayer's operator manages: a few cents of BNB and the USDT bond; it receives gas refunds and the USDT bond at exit. Bound to the node wallet at registration by signatures the Credits contract verifies (D14). |
+| **BSC signing key** | A key the relayer software generates on the server, holding no funds, used only for EIP-712 signatures; bound to the node wallet with the BSC wallet (D14). |
+| **Gas pool** | BNB in the vault, filled by a small fee on deposits, that refunds whoever submits a signed update to the vault (D13). |
 | **Active set**, **`N`** | The relayers currently allowed to approve and sign; `N` is their number. |
 | **Threshold `T`** | How many relayers must agree: `max(2, min(floor(N/2) + 1, 7))`, so 2 of 3, 3 of 4 or 5, …, 7 from 13 relayers up. |
 | **`U`** | Agreement needed to lift a pause: `max(T, ceil(2N/3))`. |
 | **Signer set** | The list of relayers' BSC keys the vault accepts, with a **nonce** that grows at every change. It follows the active set on Credits. |
-| **Eligibility** | The admission rule: at least 1M CS delegated to the node wallet with one-year delegations, from at least 2 wallets other than the owner's. |
+| **Eligibility** | The admission rule: at least 1M CS delegated to the node wallet with one-year delegations, from at least 2 wallets other than the node wallet, none above 70 %. |
 | **Delegation**, **one-year delegation** | CS that a wallet lends to a node's stake; a delegation of at least about 364 days has coefficient 1 for rewards (`coeff = Anni`) and cannot be withdrawn early. |
 | **Attestation** | A relayer's statement on Credits of a fact the contract cannot read itself (eligibility, vault values, the vault address); it counts when `T` relayers attest the same value. |
 | **Digest** | An hourly fingerprint of what a relayer sees on both chains; a relayer that differs from the majority gets a **divergence mark**. |
 | **Participation** | Share of the epoch's approvals and digests a relayer took part in; at least 80 % to earn rewards, below 50 % in 14 days it becomes inactive. |
-| **Exit** | `leave()` on Credits; the vault drops the key; 30 days later the CS bond comes back with `withdrawBond`/`claimCs` and the USDT bond with `releaseBond` (relayers' signatures) or, from 60 days, `reclaimBond` (no signatures) to the BSC address fixed when the bond was paid. |
+| **Exit** | `leave()` on Credits; the vault drops the key; 30 days later the CS bond comes back with `withdrawBond`/`claimCs` and the USDT bond with `releaseBond` (relayers' signatures) or, from 60 days, `reclaimBond` (no signatures) to the relayer's BSC wallet, fixed when the bond was paid. |
 | **Inactive** | A relayer temporarily out of the active set (offline, divergent, delegations below 1M); reversible, no loss of bond. |
 | **Version hash** | The hash of an admitted relayer software build; approvals from builds not admitted are refused. |
 | **Founder** | A relayer that applied before the founder phase closed; it keeps the founder bond (100k CS + 50 USDT) for good. |
@@ -157,7 +160,7 @@ values of [§11](#11-parameters).
 | **Free market**, **price band** | Prices are free inside a daily band (decisions D1, D11): an offer cannot be more than 5 % below or 20 % above the reference price, which is the previous day's average price of trades of at least 100 csUSDT (at the opening, the conservative price). If no such trade happens for 3 days, the reference falls 5 % a day so the market cannot freeze. A depositor may also set a maximum price for their own conversion. |
 | **Buyback** | Fees (bridge and swap) buy CS from the lowest asks; the CS go to relayers and their delegators. |
 | **Epoch**, **slot** | The reward period (7 days) and its hours (168 slots); each slot spends at most 1/168 of the epoch's fund (`buybackTick`). |
-| **Owner share** | 20 % of a relayer's reward to the owner wallet; the rest to its delegators pro rata (the 100 largest). |
+| **Owner share** | 20 % of a relayer's reward to its node wallet; the rest to its delegators pro rata (the 100 largest). |
 | **`csClaimable`** | CS the contract owes to a wallet (conversions, rewards, refunds); the wallet takes them with `claimCs`. |
 | **Return address** | Where the contract sends a wallet's CS; it defaults to the wallet itself and can be changed by its owner. Exchange addresses that need a memo must not be used: emitted transfers carry no memo. |
 
@@ -211,7 +214,7 @@ threshold of relayers unable to steal (see [§3](#3-trust-model)).
 | Asset | BSC USDT (BEP-20, 18 decimals) ↔ csUSDT on Credits, 1 to 1, amounts in multiples of 10⁻⁸ USDT |
 | Credits contracts | One contract, `CsUsdtBridge`: token, bridge, relayer registry, bonds, order book, buyback, governance |
 | BSC contract | `UsdtVault`: deposits, claims with EIP-712 threshold signatures, signer set, founders, whitelist, caps, bonds |
-| Relayer eligibility | Credits full node whose wallet holds ≥ 1,000,000 CS of incoming 1-year delegations from at least 2 wallets other than the owner's |
+| Relayer eligibility | Credits full node whose wallet holds ≥ 1,000,000 CS of incoming 1-year delegations from at least 2 wallets other than the node wallet (D14) |
 | Admission | Automatic: eligibility attested by the relayers' software, 7-day wait, no sponsors and no objection by incumbents (decision D3); refused only if it would break the cap bound (I18). In `Bootstrap`: applicants attest each other, no wait ([§5.14](#514-bootstrap)) |
 | Operational threshold | `T = max(2, min(floor(N/2) + 1, 7))`, `N` = active relayers |
 | Governance threshold | more than half of all active relayers, no cap of 7 |
@@ -273,7 +276,7 @@ threshold of relayers unable to steal (see [§3](#3-trust-model)).
   only marks the approver; it cannot block the mint (H1).
 - **Lost or duplicated events, restarts, BSC reorganisations:** deposits are read by sequential
   id from finalized blocks only; mints and claims are once per id ([§9](#9-failure-cases)).
-- **Operator key theft of one relayer:** same as one malicious relayer.
+- **Theft of one relayer server's keys** (node wallet and BSC signing key): same as one malicious relayer; the BSC wallet with BNB and the USDT bond is not on the server (D14).
 - **Contract growth:** every collection in the contract state has a bound in code ([§5.11](#511-bounded-state-and-work)).
 
 ### 3.3 What is NOT protected
@@ -364,16 +367,27 @@ lazy check that fails (conservative price lowered, relayers leaving) creates a r
   own HTTPS URL. Relayers do not coordinate with each other.
 - **Claim page**: static HTML/JS. Reads the withdrawal from Credits (through any public node
   API or a relayer's published copy), fetches signatures from the relayers' URLs registered in
-  the contract, orders them, and lets the user send `claim` from their own wallet.
+  the contract, orders them, and lets the user send `claim` from their own wallet. When an
+  urgent signed update (signer set, pause, unpause) has its signatures but has not been applied
+  for more than 1 hour, the page says so and offers a separate button to submit it; it is never
+  added to the user's claim or charged to the user automatically (D13).
 
 ### 4.1 Identities of a relayer
 
 | Identity | Chain | Used for |
 |---|---|---|
-| Node wallet | Credits | Receives the delegations; owns the bond; registers the relayer; can be kept offline |
-| Operator key | Credits | Sends approvals, digests, votes, pauses. MAY equal the node wallet. Rotated by the node wallet |
-| Signer key | BSC (secp256k1) | Signs EIP-712 messages for the vault. Never sends BSC transactions in normal operation. A key is registered once in the contract's lifetime (M1) |
-| Owner wallet | Credits | Receives the owner share of rewards; its delegations do not count for eligibility |
+| Node wallet | Credits | The node's own key, on the relayer server (D14). Receives the delegations (its own do not count); pays and recovers the CS bond; registers the relayer; sends approvals, attestations, digests, votes and pauses; receives the owner share of rewards |
+| BSC wallet (`bscWallet`) | BSC | Managed by the operator, not on the server. Holds a few cents of BNB and the USDT bond; sends `depositBond`; receives gas refunds and the USDT bond at exit; signs the binding at registration and at every signer rotation |
+| BSC signing key (`bscSigner`) | BSC (secp256k1) | Generated by the relayer software on the server; holds no funds; signs EIP-712 messages for the vault only and never sends BSC transactions. A key is registered once in the contract's lifetime (M1) |
+
+**Binding (D14).** The three are tied without any external standard: at registration both
+`bscWallet` and `bscSigner` sign the message
+`Bind(bytes32 nodeWallet,address bscWallet,address bscSigner,uint256 chainId,bytes32 creditsContract,uint64 nonce)`
+(EIP-712, domain `name = "CreditsUsdtBridgeBind"`, `version = "1"`, `chainId` = BSC chain id, no
+`verifyingContract`; `creditsContract` = the Credits contract's public key; `nonce` = the
+relayer's `bindNonce`), and the Credits contract recovers both signers with the same pure-Java
+secp256k1 code as the proofs ([§13.1](#131-verified)). The node wallet itself signs the Credits
+transaction that carries them.
 
 ### 4.2 Units and encodings
 
@@ -463,7 +477,7 @@ contract state under a sequential id and exposed by `@Getter` methods:
 | Field | Meaning |
 |---|---|
 | `id` | Sequential |
-| `nodeWallet`, `operator`, `ownerWallet` | [§4.1](#41-identities-of-a-relayer) |
+| `nodeWallet`, `bscWallet`, `bindNonce` | [§4.1](#41-identities-of-a-relayer); `bindNonce` grows at every binding |
 | `bscSigner` | Current signer key; every past key stays in `signerHistory` |
 | `signatureUrl` | HTTPS base URL where it publishes signatures and digests |
 | `status` | `Applied`, `Active`, `Inactive`, `Exiting`, `Exited`, `Slashed`, `Rejected`, `Cancelled` (an application withdrawn by `cancelApplication`) |
@@ -480,7 +494,7 @@ contract state under a sequential id and exposed by `@Getter` methods:
 
 ### 5.4 Methods
 
-Caller column: **U** any wallet, **R** operator of an active relayer, **W** node wallet of the
+Caller column: **U** any wallet, **R** node wallet of an active relayer, **W** node wallet of the
 relayer concerned, **A** anyone. All amounts are `BigDecimal` (Variant `v_big_decimal`), ids are
 `long`, addresses and hashes are `String`. The state in which each method is open is in
 [§5.12](#512-methods-by-contract-state).
@@ -513,13 +527,13 @@ relayer concerned, **A** anyone. All amounts are `BigDecimal` (Variant `v_big_de
 
 | Method | Caller | Rules |
 |---|---|---|
-| `applyRelayer(operator, ownerWallet, bscSigner, signatureUrl, version)` | W | Not blocked; not already a relayer; `bscSigner` never registered before (M1); ≤ 64 relayers that are not `Exited` or `Cancelled`; bond already paid by the same wallet ([§5.5](#55-incoming-cs-payable) `bond`, and, outside `Bootstrap`, `depositBond` on the vault attested as `bondUsdtOnBsc`) covering `bondRequired` computed now ([§5.10](#510-bond-required-at-entry)); in `Bootstrap` only the CS part is checked, the 50 USDT is enforced by the vault (§5.14 step 4); founder if the founder phase is open. Status `Applied` |
+| `applyRelayer(bscWallet, bscSigner, signatureUrl, version, walletSig, signerSig)` | W | `walletSig` and `signerSig` are valid `Bind` signatures of `bscWallet` and `bscSigner` for this node wallet and `bindNonce` (D14); `bscWallet` not bound to another relayer; not blocked; not already a relayer; `bscSigner` never registered before (M1); ≤ 64 relayers that are not `Exited` or `Cancelled`; bond already paid by the same wallet ([§5.5](#55-incoming-cs-payable) `bond`, and, outside `Bootstrap`, `depositBond` from `bscWallet` on the vault, attested as `bondUsdtOnBsc`) covering `bondRequired` computed now ([§5.10](#510-bond-required-at-entry)); in `Bootstrap` only the CS part is checked, the 50 USDT is enforced by the vault (§5.14 step 4); founder if the founder phase is open. Status `Applied` |
 | `attest(period, kind, payload, version)` | R (in `Bootstrap`: an `Applied` applicant, eligibility of other applicants only; in `AwaitingVault`: an active founder, `link` only) | Attestations of facts the contract cannot read ([§5.8](#58-attestations)): eligibility, payee lists, reserve payees, vault view, signer set applied, block limit, bond on BSC, link |
 | `activate(relayerId)` | A | State `Normal`; after 7 days, eligibility attested by `T`, bond attested, not rejected, `N < 64`; **throws `cap`** if, with the applicant in the active set, `Σ bondCs of the smallest T-set × conservativePrice < vaultView` cap (I18, N1; in the founder phase the bound is the founder cap rule instead). Status `Active`; a new signer set is recorded |
 | `activateBootstrap()` | applicant (N6) | State `Bootstrap`; at least 3 applicants each attested eligible by more than half of the other applicants, each with the 100,000 CS founder bond paid (the USDT part is enforced by the vault): all of them become `Active` founders; state `AwaitingVault` ([§5.14](#514-bootstrap)) |
 | `cancelApplication()` | W | Status `Applied`, at least 7 days after `applyRelayer`, any state (N5): status `Cancelled`, `bondCs` to `csClaimable`; the USDT bond is released on the vault without the `removedAt` condition (never a signer) |
-| `setOperator(op)`, `setSignatureUrl(url)`, `setOwnerWallet(w)`, `setReturnAddress(addr)` | W | Immediate |
-| `rotateSigner(bscSigner)` | W | New key never registered before; the old key stays in `signerHistory` and stays provable while any bond of this relayer is held; a new signer set is recorded |
+| `setSignatureUrl(url)`, `setReturnAddress(addr)` | W | Immediate |
+| `rotateSigner(bscSigner, walletSig, signerSig)` | W | New `Bind` signatures by the registered `bscWallet` and the new key, with the next `bindNonce` (D14); new key never registered before; the old key stays in `signerHistory` and stays provable while any bond of this relayer is held; a new signer set is recorded |
 | `leave()` | W | Not paused (C1); status `Exiting`; a new signer set is recorded; `exitAt = now`, `exitNonce` = its nonce. In `AwaitingVault` (N7): open, no signer set exists yet; if active founders fall below 3 the state returns to `Bootstrap` and the remaining founders return to `Applied` |
 | `withdrawBond()` | W | Not paused (C1). `Rejected`: 7 days after the rejection, no vault condition (never a signer, L2). `Exiting` that left in `AwaitingVault`: 7 days after `leave`, no vault condition (N7). Otherwise (`Exiting`, `Inactive`-and-leaving): `now ≥ exitAt + 30 days + Σ pauses it started`; `vaultView` shows a signer set with nonce ≥ `exitNonce` applied on the vault and `now ≥ removedFromVaultAt + 30 days` (C2); if blocked, the end-of-life rule of [§8.10](#810-permanent-block-migration-and-end-of-life). Credits `bondCs` to `csClaimable`; marks `Exited` (the USDT bond is released on the vault by `releaseBond`) |
 | `submitDigest(period, digestHash, version)` | R | Once per relayer per period ([§7.6](#76-state-digests)) |
@@ -636,12 +650,12 @@ In `Bootstrap` the attesters are the applicants and in `AwaitingVault` the activ
 | `vault` | `userUsdt`, `nextDepositId`, applied signer-set nonce, `withdrawOnly`, `nextDepositId` at block, bond ledger hash | digest period; values at the BSC finalized block with the greatest timestamp ≤ period start |
 | `eligibility` | relayer id, eligible (bool) | the day; delegations read at the Credits block with the greatest time ≤ day start |
 | `payees` | relayer id, list of ≤ 100 `wallet:amount` of the largest counted delegators, rounded down to whole CS | the epoch; read at the epoch start block |
-| `bscBond` | node wallet, USDT bond on the vault | when it changes |
+| `bscBond` | node wallet, USDT bond on the vault, and the address that deposited it (must be the bound `bscWallet`) | when it changes |
 | `link` | vault address, BSC chain id, hash of the vault's initial signer set | once, in `AwaitingVault`; accepted when more than half of the active founders submit it (N12) |
 | `reservePayees` | slashed relayer id, purpose, list of ≤ 100 `wallet:amount` | once per reserve-use proposal ([§8.8](#88-slashing-by-proof)) |
 
 If `T` identical payee lists are not reached by the epoch close, the relayer's whole share goes
-to its owner wallet for that epoch. Payloads are capped at 4 KB.
+to its node wallet for that epoch. Payloads are capped at 4 KB.
 
 Eligibility of an applicant (N5): accepted (eligible) at `T` identical attestations; rejected
 (ineligible) only when **more than half of active relayers** attest it ineligible, so that fewer
@@ -781,7 +795,7 @@ bridge starts only with at least 3 relayers.
    its bond back 7 days after applying.
 4. **Vault deploy.** The vault is deployed after that. Its constructor takes the founders as
    `(signer, nodeWallet)` pairs equal to the active set recorded on Credits (anyone can check this
-   before using it). Each founder then deposits its 50 USDT with `depositBond(nodeWallet, signer, returnTo, …)`. The
+   before using it). Each founder then deposits its 50 USDT with `depositBond(nodeWallet, signer, 50)` from its BSC wallet. The
    vault refuses deposits while it has fewer than 3 signers or while a founder that is a signer
    (`foundersInSet()`) has less than 50 USDT of bond (N8).
 5. **Link.** More than half of the active founders attest `link` (vault address, BSC chain id,
@@ -827,11 +841,12 @@ contract address (informational).
 | `founders`, `isFounder`, `foundersFrozen` | Founder set; only shrinks once frozen |
 | `foundersInSet()` | Founders that are signers |
 | `founderWallet[address]` | Node wallet of each founder signer, to match `depositBond` (N8) |
+| `gasPool`, `gasFee`, `gasPoolTarget`, `maxRefundPerTx`, `maxRefundGasPrice`, `maxRefundPerHour`, `refundWindow` | BNB gas pool and its parameters (D13); the vault holds no other BNB |
 | `whitelist`, `isWhitelisted` | Trusted signers for immediate large claims |
 | `foundersBelowTwoSince` | Time `foundersInSet()` fell below 2 (0 otherwise) |
 | `nextDepositId` | Sequential |
 | `userUsdt` | User funds: deposits − claims − migrations |
-| `bondUsdt[bytes32 nodeWallet]`, `bondSigner[bytes32]`, `bondReturn[bytes32]` | Relayer bonds apart from user funds, the signer key of each bond, and the BSC address the bond returns to, fixed at the first deposit |
+| `bondUsdt[bytes32 nodeWallet]`, `bondSigner[bytes32]`, `bondReturn[bytes32]` | Relayer bonds apart from user funds, the signer key of each bond, and the BSC wallet the bond returns to: the sender of the first `depositBond` (D14) |
 | `reserveUsdt`, `reserveOf[bytes32 nodeWallet]` | Slashed USDT bonds, in total and per slashed relayer |
 | `claimed[uint64]` | Withdrawal ids paid or queued |
 | `queue` | FIFO of queued claims `(id, to, amount, kind, creditsTo, fallback, unlockTime)` |
@@ -862,6 +877,7 @@ Domain: `EIP712Domain(string name,string version,uint256 chainId,address verifyi
 | `Block(uint64 nonce)` |
 | `Migration(uint64 nonce,address target)` |
 | `ReserveUse(uint64 nonce,uint8 purpose,bytes32 nodeWallet,address to,uint256 amount)` (purpose: 0 return to the slashed relayer, 1 reimburse a user, 2 prover; N4) |
+| `GasParams(uint64 nonce,uint256 gasFee,uint256 gasPoolTarget,uint256 maxRefundPerTx,uint256 maxRefundGasPrice,uint256 maxRefundPerHour)` (D13) |
 
 Java encoding of `hashStruct(Claim)` (used for the stored hash and in proofs):
 `keccak256(typeHash ‖ pad32(withdrawalId) ‖ pad32(kind) ‖ pad32(to) ‖ pad32(amountWei) ‖
@@ -877,20 +893,21 @@ duplicates; every signer MUST be in the current signer set.
 
 | Method | Who | Rules |
 |---|---|---|
-| `deposit(amount, creditsTo, maxCsPrice)` | user | Not paused, not `withdrawOnly`; `signers.length ≥ 3` (L5); every founder in `foundersInSet()` has `bondUsdt[founderWallet] ≥ 50 USDT` (N8); `amount` multiple of 10¹⁰ and ≥ `minDeposit`; `creditsTo ≠ 0`; `userUsdt + amount ≤ cap`. Pulls USDT measuring the balance delta. Emits `Deposit(id, from, amount, creditsTo, maxCsPrice)` |
+| `deposit(amount, creditsTo, maxCsPrice)` payable | user | `msg.value` MUST equal `currentGasFee()` exactly (`gasFee`, or 0 while `gasPool ≥ gasPoolTarget`), else revert; it is added to `gasPool` (D13). Not paused, not `withdrawOnly`; `signers.length ≥ 3` (L5); every founder in `foundersInSet()` has `bondUsdt[founderWallet] ≥ 50 USDT` (N8); `amount` multiple of 10¹⁰ and ≥ `minDeposit`; `creditsTo ≠ 0`; `userUsdt + amount ≤ cap`. Pulls USDT measuring the balance delta. Emits `Deposit(id, from, amount, creditsTo, maxCsPrice)` |
 | `claim(Claim, sigs)` | anyone | **While fully paused** (D9): refused. **While paused** (D2, N2): paid only if `kind = 0`, `amount < delayThreshold`, the H3 test passes (a whitelist majority among the signatures, or `undelayedWindow + amount ≤ delayThreshold`) and the rolling daily cap allows it; otherwise the call reverts, is not queued and does not mark `claimed`; both windows are updated as in normal mode. **Not paused:** not claimed; `threshold()` valid signatures; `kind 1` rules below. If the rolling daily cap would be exceeded, the claim is queued (M4) instead of reverting. If the signatures include fewer than `floor(W/2)+1` whitelisted signers (`W` = whitelisted members of the signer set; `W = 0` always counts as fewer) and `undelayedWindow + amount > delayThreshold`, it is queued for 24 h (H3). Else paid. Marks `claimed[id]` |
 | `executeQueued(count)` | anyone | Not paused; walks the queue in FIFO order and pays each claim whose unlock time has passed and that fits in the rolling daily cap; a claim that does not fit yet keeps its place but does not block the later ones; a claim above `dailyCap` (only possible if the cap was lowered after the burn) is paid when the rolling window is otherwise empty |
 | `updateSigners(SignerSet, sigs)` | anyone | `threshold()` of the current signers; `nonce = signerNonce + 1`; new set non-empty, sorted, ≤ 64; sets `removedAt` for removed signers; `foundersToAdd` only while not `foundersFrozen`, each in the new set; `freezeFounders` sets `foundersFrozen`. Founders leave the founder set only by their own `FounderRemoval` or a matured removal |
 | `requestFounderRemoval(FounderRemoval, sigs)` | anyone | Signed by the founder alone: immediate. Signed by `threshold()` instead: effective after 30 days unless cancelled by a majority of founders |
 | `setWhitelist(Whitelist, sigs)` | anyone | Normal mode: a majority of `foundersInSet()`, immediate. Fallback mode (`foundersBelowTwoSince` older than 30 days): more than half of all signers, effective after 7 days |
 | `setCap(Cap, sigs)` | anyone | `threshold()` signatures. Decreases immediate. Increases after 7 days, at most ×2 per step, for `cap` and `dailyCap` both. Always `dailyCap ≤ cap / 5`. While `foundersInSet() ≥ threshold()`: `cap ≤ 20,000 USDT` (H4) |
-| `depositBond(nodeWallet, signer, returnTo, amount)` | relayer | Adds to `bondUsdt[nodeWallet]`, records `bondSigner`; the first deposit fixes `bondReturn[nodeWallet] = returnTo` (non-zero, not the vault), later deposits must repeat the same address; not counted in `userUsdt` or the cap |
+| `depositBond(nodeWallet, signer, amount)` | the relayer's BSC wallet | Adds to `bondUsdt[nodeWallet]`, records `bondSigner`; the first deposit fixes `bondReturn[nodeWallet] = msg.sender` (the BSC wallet, D14), later deposits must come from the same address; the relayers attest the depositing address on Credits, which must equal the bound `bscWallet`; not counted in `userUsdt` or the cap |
 | `releaseBond(BondRelease, sigs)` | anyone | `threshold()` signatures; `bondSigner[nodeWallet]` not a signer and `removedAt + 30 days` passed (C2, L9); pays `bondReturn[nodeWallet]` (the message's `to` must equal it) |
 | `reclaimBond(nodeWallet)` | anyone | No signatures: `bondSigner[nodeWallet]` not a signer, `removedAt + 60 days` passed and no `slashBond` applied; pays the whole `bondUsdt[nodeWallet]` to `bondReturn[nodeWallet]`. So a bond comes back even if the remaining relayers withhold their signatures; a slash proven on Credits has 60 days to reach the vault |
 | `slashBond(BondSlash, sigs)` | anyone | `threshold()` signatures; moves the bond to `reserveUsdt` / `reserveOf` |
 | `useReserve(ReserveUse, sigs)` | anyone | `unpauseThreshold()` signatures (mirrors the two-thirds vote, N4); signed by relayers only after the Credits reserve-use proposal executed; `amount ≤ reserveOf[nodeWallet]`; pays `to` from the reserve, never from `userUsdt` or other bonds |
 | `pause(Pause, sig)` | anyone, with one signer's signature | `deadline` not passed (L6); limits of [§8.9](#89-pause-and-unpause). The signer signs, its gas wallet (or anyone) submits: the signer key never needs BNB |
 | `unpause(Unpause, sigs)` | anyone | `unpauseThreshold()` signatures |
+| `setGasParams(GasParams, sigs)` | anyone | `threshold()` signatures, after the Credits vote; hard caps in code: `gasFee ≤ 0.001 BNB`, `gasPoolTarget ≤ 1 BNB`, `maxRefundPerTx ≤ 0.01 BNB`, `maxRefundGasPrice ≤ 20 gwei`, `maxRefundPerHour ≤ 0.05 BNB` (D13) |
 | `block(Block, sigs)` | anyone | `threshold()` signatures. Sets `withdrawOnly` forever; records `blockedDepositId = nextDepositId` |
 | `setMigration(Migration, sigs)` | anyone | `threshold()` signatures; only while `withdrawOnly`; effective after 7 days; target a contract |
 
@@ -902,6 +919,19 @@ accept calls only from its registered predecessor and MUST pull the USDT with `t
 measuring the balance delta (M9).
 
 No function transfers user USDT except `claim`/`executeQueued`. Reserve funds leave only through `useReserve`.
+
+**Gas pool (D13).** The submitter (`msg.sender`) of a call that applies a signed update is
+refunded from `gasPool` at the end of the call: `updateSigners`, `requestFounderRemoval`,
+`setWhitelist`, `setCap`, `releaseBond`, `slashBond`, `useReserve`, `pause`, `unpause`, `block`,
+`setMigration`, `setGasParams`. Refund = `min((gasleft at entry − gasleft at exit + 30,000) ×
+min(tx.gasprice, maxRefundGasPrice), maxRefundPerTx, gasPool, maxRefundPerHour − refunded in the
+rolling hour)`. Only a call that changes state is refunded (the first valid submission; a call
+that reverts pays nothing and a replayed nonce reverts); the refund is sent with a plain value
+transfer under the reentrancy guard and, if that transfer fails, stays in the pool without
+reverting the update. Nothing is refunded when the pool is empty: the update still applies.
+User calls (`deposit`, `claim`, `executeQueued`) and a relayer's own calls (`depositBond`,
+`reclaimBond`) are not refunded. The vault rejects plain BNB transfers (`receive` reverts), so
+its BNB balance always equals `gasPool`; the pool never leaves the vault except as refunds.
 
 ### 6.4 Reentrancy and tokens
 
@@ -918,7 +948,8 @@ deposits.
 - Credits client: Thrift API of the operator's own node (never a shared gateway).
 - BSC client: at least 2 independent RPC providers, queried for the same `finalized` block; a
   disagreement on a block hash or a log stops the cycle and raises an alarm.
-- Signer: holds the operator key and the BSC signer key ([§7.8](#78-keys)).
+- Signer: holds the node wallet key (the node's own) and the BSC signing key it generated; never the BSC wallet ([§7.8](#78-keys)).
+- Submitter: sends pending signed updates to the vault from a hot BSC account funded by the gas pool refunds, or asks the operator to submit from the BSC wallet (D13).
 - Publisher: writes signed withdrawals, full withdrawal records and digests as static JSON under
   `signatureUrl`.
 - Store: a local database with cursors and the history of what was signed.
@@ -974,9 +1005,15 @@ Credits records. On any failure: pause both contracts, publish the evidence, sto
 (M7) Every digest period (1 hour), the contract takes at the first call of the period a snapshot
 of its own `totalSupply`, `nextWithdrawalId`, signer-set nonce and mint watermark. Each relayer
 submits `hash(period, snapshot values, BSC values at the finalized block with the greatest
-timestamp ≤ period start, invariantOk)` and publishes the clear values. The contract counts the
+timestamp ≤ period start, invariantOk)` and publishes the clear values, plus, outside the hash,
+the BNB balance of its BSC wallet and of its submitter account, so a relayer that cannot pay gas
+is visible (D13). The contract counts the
 most common digest; a relayer whose digest differs from one that has at least `T` submitters
 gets a divergence mark.
+
+In the same loop each relayer submits every signed vault update that has reached its signatures
+and is not applied yet, after a random delay of 0–120 s so that relayers do not all pay for the
+same update; the gas pool refunds the first submitter (D13).
 
 In the same loop each relayer calls `buybackTick()` early in each hour slot if no call has
 consumed the slot yet (the slot also runs lazily at the start of any state-changing call), and
@@ -1002,22 +1039,22 @@ consumed the slot yet (the slot also runs lazily at the start of any state-chang
 ### 7.8 Keys
 
 - Keys never appear in code, repositories or logs. Files mode `0600`, owned by the relayer user.
-- A relayer uses up to five keys or addresses, kept apart so that a compromised server cannot move
-  its bond:
+- A relayer's operator manages **two wallets**, one per chain; the software adds one key of its
+  own (D14). They are kept apart so that a compromised server cannot take the BNB or the bond:
 
-  | Key or address | Chain | Holds funds | Where | Used for |
+  | Key or wallet | Chain | Holds | Where | Used for |
   |---|---|---|---|---|
-  | Node wallet | Credits | the delegations it receives; CS for the bond | offline when possible | registering, rotating keys, leaving, withdrawing the CS bond |
-  | Operator key | Credits | a little CS (≈ 0.02 CS per approval) | relayer server | `approveMint`, attestations, digests, votes, `buybackTick`, pause |
-  | BSC signer (`bscSigner`) | BSC | none | relayer server | EIP-712 signatures only (claims, signer sets, caps, pause, bond release and slash); signing costs nothing |
-  | BSC gas wallet | BSC | a little BNB (≈ 0.01 BNB, to be measured on testnet) | relayer server or operator's machine | sending transactions that someone must pay for: `depositBond`, submitting signed updates (`updateSigners`, `setCap`, `slashBond`, `useReserve`, unpause, `releaseBond`), its own `Pause` signature, `reclaimBond` |
-  | Bond return address (`returnTo`) | BSC | receives the USDT bond back | offline | fixed at the first `depositBond`; never used to sign |
+  | Node wallet | Credits | the CS bond (100,000 CS for founders); a little CS for fees (≈ 0.02 CS per approval); receives the 1M CS of delegations | relayer server (it is the node's key) | registering, approvals, attestations, digests, votes, `buybackTick`, pause, rotating the BSC signing key with the BSC wallet's signature, leaving, receiving rewards and the CS bond back |
+  | BSC wallet (`bscWallet`) | BSC | a few cents of BNB; the USDT bond (50 for founders) | the operator's own device, not the server | `depositBond`; signing the binding; occasional submissions; receiving gas refunds and the USDT bond back |
+  | BSC signing key (`bscSigner`) | BSC | nothing | relayer server, generated by the software | EIP-712 signatures only (claims, signer sets, caps, pause, bond release and slash, gas parameters); signing costs nothing |
 
-- The BSC signer MUST NOT hold funds and MUST differ from the gas wallet and from `returnTo`.
-  Submitting signed messages to the vault is open to anyone: a relayer without BNB still signs,
-  and another relayer or user pays the gas to submit; claims are always paid by the user.
-- The operator key MAY differ from the node wallet; the node wallet only registers, rotates and
-  withdraws bonds and can be kept offline.
+- The BSC signing key MUST NOT hold funds and MUST differ from the BSC wallet.
+- Submitting signed messages to the vault is open to anyone and refunded from the gas pool (D13).
+  The relayer software MAY keep a small hot submitter account on the server for this; it holds
+  only what the refunds bring back. Claims are always paid by the user.
+- **What an operator needs** (D14): on Credits, the node wallet with the CS bond, a little CS
+  for fees and the 1M CS of one-year delegations received; on BSC, a wallet with a few cents of
+  BNB and the USDT bond.
 
 ### 7.9 Restarts
 
@@ -1084,23 +1121,23 @@ contracts treat as a duplicate.
 6. **Participation** (underspecified 6) = approvals of the epoch's minted deposits within 10
    minutes of the mint, digests submitted, and eligibility attestations for open applications
    (N5), over the number expected of each; an epoch without deposits counts the others only.
-7. Each relayer's share: `ownerShare` (20 %) to its owner wallet, the rest to the payees attested
-   for that epoch ([§5.8](#58-attestations)) pro rata; the remainder to the owner. Credited to
+7. Each relayer's share: `ownerShare` (20 %) to its node wallet, the rest to the payees attested
+   for that epoch ([§5.8](#58-attestations)) pro rata; the remainder to the node wallet. Credited to
    `csClaimable`.
 8. Whatever the slices did not spend carries over to the next epoch's fund.
 
 ### 8.5 Relayer admission
 
-1. Node wallet pays the CS bond (`bond` command), and on BSC `depositBond(nodeWallet, signer, returnTo, 50)`, `returnTo` being the BSC address its USDT bond will go back to.
-2. Node wallet calls `applyRelayer(...)`.
+1. The software generates the BSC signing key; the BSC wallet and the signing key sign `Bind` ([§4.1](#41-identities-of-a-relayer)). The node wallet pays the CS bond (`bond` command), and the BSC wallet calls `depositBond(nodeWallet, signer, amount)` on the vault; the USDT bond will go back to that BSC wallet.
+2. The node wallet calls `applyRelayer(bscWallet, bscSigner, signatureUrl, version, walletSig, signerSig)`.
 3. Each relayer's software reads the candidate's delegations from its own node at the day's
    reference block (`DelegatedItem`: `wallet`, `sum`, `validUntil`, `fromTime`, `coeff`) and
    attests eligibility:
    - counted: incoming delegations with `coeff = 4` (`Anni`, a term of at least ≈ 364 days,
      [§13.1](#131-verified)), `validUntil > now + 30 days`, from wallets other than the node
-     wallet and the declared owner wallet;
+     wallet (D14);
    - total counted ≥ 1,000,000 CS; at least 2 distinct donors; no donor above 70 % of the total;
-   - warning only (not blocking): donors linked to each other or to the owner by direct
+   - warning only (not blocking): donors linked to each other or to the node wallet by direct
      transfers in the last 6 months.
 4. 7-day wait (not in `Bootstrap`, [§5.14](#514-bootstrap)). Incumbents cannot object (D3). An
    applicant is accepted at `T` eligibility attestations and `Rejected` only when more than half
@@ -1262,6 +1299,9 @@ withdrawals, so a false alarm never locks users out.
 | Fewer than 3 signers on the vault | The vault refuses new deposits (L5); claims continue |
 | One relayer malicious | Cannot reach `T`; false claim signature → slashed by proof in any state; wrong mint approval → orphan mark, mint unaffected (H1) |
 | One relayer pausing repeatedly | Once per 7 days; an unfounded pause makes it `Inactive` |
+| Nobody submits a signed update to the vault | Every relayer's loop submits it after a random delay and is refunded from the gas pool; a relayer with no BNB is visible in the digests; the claim page offers the urgent ones after 1 hour; if the pool is empty the update still applies, at the submitter's cost (D13) |
+| Gas pool drained by spam submissions | Only state-changing first submissions are refunded, at most `maxRefundPerTx` each and `maxRefundPerHour` in total, at a capped gas price; signed updates cannot be made up without the threshold (D13) |
+| A relayer server is compromised | The attacker gets the node wallet key and the BSC signing key: it can act as that relayer (one malicious relayer, proofs and the threshold apply); it cannot take the BSC wallet's BNB or redirect the USDT bond, which returns to the BSC wallet (D14) |
 | Threshold malicious | Paid false claims at the normal rate (1,000 USDT per 24 h without a whitelist majority, the daily cap with one) up to the vault cap; a pause does not stop small claims (D2); proofs slash the signers; [§3.3](#33-what-is-not-protected) |
 | Relayer restart | Cursors and "submitted first" records; duplicates are ignored |
 | Lost BSC event (RPC gap) | Ids must be contiguous; a gap stops the loop until both sources agree |
@@ -1320,6 +1360,10 @@ withdrawals, so a false alarm never locks users out.
     active relayers able to reach T × conservativePrice ≥ vault cap` (N1).
 19. Slash reserve funds leave only through an executed two-thirds proposal (Credits) and
     `useReserve` with `unpauseThreshold()` signatures (vault) (D4, N4).
+20. The vault's BNB balance equals `gasPool`; BNB leaves it only as submitter refunds, each
+    ≤ `maxRefundPerTx`, and never touches users' USDT or bonds (D13).
+21. Every active relayer's node wallet, BSC wallet and BSC signing key are bound by `Bind`
+    signatures verified on Credits; a USDT bond returns only to the BSC wallet that paid it (D14).
 
 ---
 
@@ -1351,6 +1395,10 @@ withdrawals, so a false alarm never locks users out.
 | Minimum deposit / withdrawal | 5 USDT / 5 csUSDT | vote | ≥ 1; `minWithdrawal ≥ bridgeFee + 1` (L3) |
 | Bridge fee | 0.05 csUSDT per direction | vote | ≤ 1 csUSDT |
 | Swap fee | 0.1 % (taker) | vote | ≤ 1 % |
+| Gas fee on deposits (D13) | 0.0001 BNB, 0 while the pool ≥ target | vote, then `GasParams` | ≤ 0.001 BNB |
+| Gas pool target | 0.05 BNB | vote | ≤ 1 BNB |
+| Refund caps | 0.002 BNB per call, 0.01 BNB per hour, gas price ≤ 3 gwei | vote | ≤ 0.01 BNB, ≤ 0.05 BNB, ≤ 20 gwei |
+| Submit delay of relayers | random 0–120 s | relayer software | — |
 | Price band down / up (D11) | 5 % / 20 % per UTC day around `refPrice` | vote | down 1–20 %, up 5–100 % |
 | Band qualifying fill | 100 csUSDT | vote | 10–10,000 |
 | Band idle days before decay | 3 | vote | 1–30 |
@@ -1431,7 +1479,14 @@ probe today), mixed executors (`EXECUTOR_JAR_ALT`):
 - paused-mode claims: a small claim within the undelayed window is paid, a small claim beyond
   it reverts without being queued or marked, a large claim reverts; the founder-bond condition on
   deposits; `useReserve` paying only from the slashed relayer's reserve;
-- Foundry unit and invariant tests (I1 via a model of Credits, I6, I7, I14, I17), fuzzing of
+- gas pool (D13): a deposit with the exact fee, with a wrong amount (reverts), with the pool at
+  target (fee 0); refunds on each refunded call, none on a reverted or replayed call, caps per
+  call and per hour, a failing refund transfer that leaves the update applied, plain BNB
+  rejected;
+- binding (D14): `Bind` test vectors signed with eth-account and checked in Java (bad signer,
+  wrong node wallet, wrong nonce, reused wallet); `depositBond` from another address than the
+  bound wallet refused by the attestation; rotation with and without the wallet's signature;
+- Foundry unit and invariant tests (I1 via a model of Credits, I6, I7, I14, I17, I20), fuzzing of
   signature sets, EIP-712 test vectors shared with the Java implementation.
 
 ### 12.4 Relayers, end to end
@@ -1535,6 +1590,8 @@ These need a decision by the project owner. Until then the text follows the curr
 | D10 | Bootstrap protection (N6) | **Decided 2026-11-06: (a).** Operational defence only (publish the Credits address after the link, with the founders' node wallets; `activateBootstrap` callable only by an applicant). Owner's assessment: a takeover needs several strangers with 1M CS of one-year delegations each and gains nothing, so it is not expected; if it happens, the project redeploys and no user funds are at risk | — | — |
 | D11 | Price band (owner's proposal, 2026-11-06) | **Decided 2026-11-06.** Asks and bids within −5 % / +20 % of a daily reference price (previous day's VWAP of fills ≥ 100 csUSDT; the conservative price at the opening); anti-freeze decay after 3 idle days; all configurable by vote within hard caps ([§5.9](#59-order-matching)). Refines D1: free market inside the band | — | — |
 | D12 | Return of a relayer's USDT bond (owner, 2026-11-06) | **Decided 2026-11-06.** The BSC return address is fixed when the bond is first paid; after leaving, the bond is released with the relayers' signatures from 30 days, or by the relayer alone with `reclaimBond` from 60 days if no slash reached the vault ([§6.3](#63-methods)) | — | — |
+| D13 | Gas for vault updates (owner, 2026-11-06) | **Decided 2026-11-06.** A small BNB fee on deposits (0.0001 BNB, 0 while the pool holds 0.05 BNB) fills a gas pool in the vault that refunds whoever submits a signed update; relayers submit automatically after a random delay; no USDT→BNB conversion in the vault (a DEX call would add attack surface, sandwich risk and a dependency) ([§6.3](#63-methods)) | — | — |
+| D14 | Relayer wallets (owner, 2026-11-06) | **Decided 2026-11-06.** Two wallets per relayer: the node wallet on Credits (bond, delegations, Credits transactions, rewards) and a BSC wallet (BNB, USDT bond, refunds, bond return); the software generates a BSC signing key with no funds; the three are bound by `Bind` signatures the Credits contract verifies; no separate operator or owner wallet ([§4.1](#41-identities-of-a-relayer), [§7.8](#78-keys)) | — | — |
 
 ---
 

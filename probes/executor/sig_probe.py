@@ -82,7 +82,19 @@ def main():
             out["high_s_rejected"] = r["ok"] and r["ret"] == ""
         finally:
             ex.stop()
+        out["trace"] = [c for c in map(h.comparable, rec.steps) if c is not None]
         results.append(out)
+
+    diffs = 0
+    for other in results[1:]:
+        a, b = results[0].get("trace", []), other.get("trace", [])
+        d = [i for i, (x, y) in enumerate(zip(a, b)) if x != y] + ([min(len(a), len(b))] if len(a) != len(b) else [])
+        print(f"== {other['jar']} against {results[0]['jar']}: {len(d)} differing steps", file=sys.stderr)
+        for i in d[:10]:
+            print(f"  step {i}:\n    ref:   {a[i][:300] if i < len(a) else None}\n    other: {b[i][:300] if i < len(b) else None}", file=sys.stderr)
+        diffs += bool(d)
+    for o in results:
+        o.pop("trace", None)
 
     print(json.dumps(results, indent=1))
     if args.json:
@@ -90,7 +102,7 @@ def main():
             json.dump(results, f, indent=1)
     ok = all(o.get("recovered") == len(cases) and o.get("keccak_empty_ok") and o.get("high_s_rejected")
              and o.get("tampered_digest_rejected") for o in results)
-    sys.exit(0 if ok else 1)
+    sys.exit(0 if ok and not diffs else 1)
 
 
 if __name__ == "__main__":

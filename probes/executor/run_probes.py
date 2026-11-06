@@ -114,12 +114,26 @@ def main():
         finally:
             ex.stop()
         out["findings"] = rec.findings
+        out["trace"] = [c for c in map(h.comparable, rec.steps) if c is not None]
         results.append(out)
+
+    diffs = 0
+    for other in results[1:]:
+        a, b = results[0].get("trace", []), other.get("trace", [])
+        d = [i for i, (x, y) in enumerate(zip(a, b)) if x != y] + ([min(len(a), len(b))] if len(a) != len(b) else [])
+        print(f"== {other['jar']} against {results[0]['jar']}: {len(d)} differing steps", file=sys.stderr)
+        for i in d[:10]:
+            print(f"  step {i}:\n    ref:   {a[i][:300] if i < len(a) else None}\n    other: {b[i][:300] if i < len(b) else None}", file=sys.stderr)
+        diffs += bool(d)
+    for o in results:
+        o.pop("trace", None)
 
     print(json.dumps(results, indent=1, default=str))
     if args.json:
         with open(args.json, "w") as f:
             json.dump(results, f, indent=1, default=str)
+    ok = all(o.get("deploy", {}).get("ok") and not o.get("findings") for o in results)
+    sys.exit(0 if ok and not diffs else 1)
 
 
 if __name__ == "__main__":

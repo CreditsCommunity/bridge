@@ -1,0 +1,231 @@
+name: Runtime probes
+
+# What the bridge design needs from the Credits runtime, measured on the executors that run on
+# mainnet and on a private Credits network. See probes/README.md.
+
+on:
+  workflow_dispatch:
+    inputs:
+      network:
+        description: Also run the private Credits network (builds the node, about 1 hour)
+        type: boolean
+        default: true
+      node_ref:
+        description: CreditsCommunity/node ref for the harness, the network scripts and the node build
+        default: community-v4.2.532-community.16
+  push:
+    branches: [main]
+    paths: ['probes/**', '.github/workflows/probes.yml']
+
+concurrency:
+  group: probes-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  NODE_REF: ${{ inputs.node_ref || 'community-v4.2.532-community.16' }}
+  COMMUNITY_RELEASE: community-v4.2.532-community.16
+  COMMUNITY_ASSET: credits-node-4.2.532-community.16-linux-x64.tar.gz
+  BOOST_VERSION: 1.83.0
+  BOOST_SHA256: 6478edfe2f3305127cffe8caf73ea0176c53769f4bf1585be237eb30798c3b8e
+  BOOST_PREFIX: /home/runner/boost
+  CCACHE_DIR: /home/runner/.ccache
+
+jobs:
+  executor:
+    name: Executors (official 1518 and community)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Checkout CreditsCommunity/node (executor harness)
+        uses: actions/checkout@v4
+        with:
+          repository: CreditsCommunity/node
+          ref: ${{ env.NODE_REF }}
+          path: node
+
+      - name: Thrift interface definitions
+        run: git -C node submodule update --init --depth 1 third-party/thrift-interface-definitions
+
+      # the executor of the official mainnet release (the one most operators run), with its JDK
+      - name: Restore official executor
+        id: cache-official
+        uses: actions/cache@v4
+        with:
+          path: official
+          key: contract-executor-mainnet-4.2.532.0-v2
+
+      - name: Fetch official executor
+        if: steps.cache-official.outputs.cache-hit != 'true'
+        run: |
+          curl -sSfL -o release.tar.gz \
+            https://github.com/CREDITSCOM/node/releases/download/mainnet-4.2.532.0/Ubuntu20_Mainnet-4.2.532.0.tar.gz
+          mkdir -p official
+          tar -xzf release.tar.gz -C official
+          rm -rf official/csnode/javafx-sdk-13 release.tar.gz
+
+      - name: Fetch community executor
+        run: |
+          gh release download "$COMMUNITY_RELEASE" -R CreditsCommunity/node -p "$COMMUNITY_ASSET" -p SHA256SUMS
+          grep " $COMMUNITY_ASSET\$" SHA256SUMS | sha256sum -c
+          mkdir -p community
+          tar -xzf "$COMMUNITY_ASSET" -C community
+          rm "$COMMUNITY_ASSET"
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Locate executors
+        run: |
+          official=$(find "$PWD/official" -type f -name contract-executor.jar | head -1)
+          community=$(find "$PWD/community" -type f -name contract-executor.jar | head -1)
+          jdk=$(find "$PWD/official" -maxdepth 3 -type d -name 'java-11-openjdk*' | head -1)
+          test -n "$official" && test -n "$community" && test -n "$jdk"
+          for j in "$official" "$community"; do echo "$j: $(unzip -p "$j" META-INF/MANIFEST.MF | grep -i ImplementationVersion)"; done
+          echo "OFFICIAL_JAR=$official" >> "$GITHUB_ENV"
+          echo "COMMUNITY_JAR=$community" >> "$GITHUB_ENV"
+          echo "PROBE_JDK=$jdk" >> "$GITHUB_ENV"
+
+      - name: Python packages
+        run: python3 -m pip install --user --quiet --break-system-packages thriftpy2 base58 eth-account
+
+      - name: Bridge contract probe
+        run: |
+          python3 probes/executor/run_probes.py --node node --jar "$OFFICIAL_JAR" --jar "$COMMUNITY_JAR" \
+            --jdk "$PROBE_JDK" --deposits 500 --relayers 13 --work run-bridge --json bridge-probe.json
+
+      - name: Signature probe
+        run: |
+          python3 probes/executor/sig_probe.py --node node --jar "$OFFICIAL_JAR" --jar "$COMMUNITY_JAR" \
+            --jdk "$PROBE_JDK" --count 50 --work run-sig --json sig-probe.json
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: executor-probes-${{ github.run_id }}
+          path: |
+            *-probe.json
+            run-*/executor*/executor.log
+          if-no-files-found: ignore
+
+  network:
+    name: Private Credits network
+    if: github.event_name == 'push' || inputs.network
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Checkout CreditsCommunity/node
+        uses: actions/checkout@v4
+        with:
+          repository: CreditsCommunity/node
+          ref: ${{ env.NODE_REF }}
+          path: node
+
+      - name: Checkout submodules
+        working-directory: node
+        run: |
+          git submodule update --init -- cscrypto p2p \
+            third-party/berkeleydb third-party/thrift third-party/thrift-interface-definitions \
+            third-party/googletest third-party/lmdb third-party/lmdbxx third-party/nameof third-party/rocksdb
+          git -C cscrypto submodule update --init
+          git -C p2p submodule update --init
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cmake ninja-build flex bison autoconf automake libtool pkg-config ccache python3-nacl python3-base58
+          python3 -m pip install --user --quiet --break-system-packages thriftpy2
+
+      - name: Restore Boost
+        id: cache-boost
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.BOOST_PREFIX }}
+          key: boost-${{ env.BOOST_VERSION }}-static-rt-ubuntu-24.04-v1
+
+      - name: Build Boost
+        if: steps.cache-boost.outputs.cache-hit != 'true'
+        run: |
+          v=${BOOST_VERSION//./_}
+          curl -sSfL -o boost.tar.bz2 "https://archives.boost.io/release/${BOOST_VERSION}/source/boost_${v}.tar.bz2"
+          echo "${BOOST_SHA256}  boost.tar.bz2" | sha256sum -c
+          tar xjf boost.tar.bz2
+          cd "boost_${v}"
+          ./bootstrap.sh --with-libraries=system,filesystem,program_options,date_time,regex,log,iostreams,thread,serialization,atomic,chrono
+          ./b2 -j"$(nproc)" -d0 variant=release link=static runtime-link=static threading=multi \
+            cxxflags=-fPIC --layout=tagged -sNO_BZIP2=1 -sNO_ZSTD=1 -sNO_LZMA=1 \
+            install --prefix="${BOOST_PREFIX}"
+
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-testnet-${{ env.NODE_REF }}-${{ github.run_id }}
+          restore-keys: ccache-testnet-${{ env.NODE_REF }}-
+
+      # the configuration of the node's own testnet workflow
+      - name: Build node (testnet)
+        working-directory: node
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DENABLE_TESTS=ON \
+            -DBoost_ROOT="${BOOST_PREFIX}" \
+            -DBoost_NO_SYSTEM_PATHS=ON \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_FLAGS="-include cstdint -include cstddef" \
+            -DWITH_HASKELL=OFF \
+            -DCREDITS_TESTNET=ON
+          ccache --max-size=2G
+          cmake --build build -j"$(nproc)" --target node
+
+      - name: Contract executor
+        uses: ./node/.github/actions/contract-executor
+
+      # run.sh has no hook for outside scripts: the bridge probe runs in place of tokens.py
+      - name: Put the bridge probe in place
+        run: |
+          cp node/ci/testnet/tokens.py node/ci/testnet/node_tokens.py
+          cp probes/network/bridge_net.py node/ci/testnet/tokens.py
+          echo "BRIDGE_NET_SOURCE=$PWD/probes/network/NetProbe.java" >> "$GITHUB_ENV"
+
+      - name: Run private network
+        timeout-minutes: 110
+        working-directory: node
+        env:
+          NODES: '5'
+          TARGET_SEQ: '1100'
+          TIMEOUT_MIN: '60'
+          RESTART_AT: '0'
+          CONTRACTS: '1'
+          TOKENS: '1'
+          TOKENS_VIA: '1'
+          FUND: '1'
+          LOAD_SECONDS: '60'
+          WORK: ${{ github.workspace }}/testnet-run
+        run: ci/testnet/run.sh build/client/node
+
+      - name: Bridge probe result
+        if: always()
+        run: |
+          cat testnet-run/tokens.log 2>/dev/null || echo "no tokens.log"
+          grep -h "contract states:" testnet-run/n*/log/* 2>/dev/null | tail -5 || true
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: network-probes-${{ github.run_id }}
+          path: |
+            testnet-run/tokens.json
+            testnet-run/tokens.log
+            testnet-run/contracts.log
+            testnet-run/fund.log
+          if-no-files-found: ignore

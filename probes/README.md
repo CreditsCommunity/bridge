@@ -2,7 +2,7 @@
 
 Measurements of the Credits contract runtime that the bridge design depends on.
 
-`executor/run_probes.py` drives `BridgeProbe.java` (a probe, not the real cUSDT contract) on a
+`executor/run_probes.py` drives `BridgeProbe.java` (a probe, not the real csUSDT contract) on a
 contract executor with no node, through the executor harness of the community node
 (`ci/contracts/executor_harness.py` in CreditsCommunity/node):
 

@@ -9,7 +9,7 @@ import java.util.Set;
 import java.util.TreeSet;
 
 /**
- * Probe, not the real cUSDT: measures what the bridge design needs from the Credits runtime.
+ * Probe, not the real csUSDT contract: measures what the bridge design needs from the Credits runtime.
  * - approval counting per deposit id, mint at a threshold, conflict on differing data;
  * - a bounded record of minted ids (watermark plus the ids above it);
  * - sequential withdrawal ids from burns;

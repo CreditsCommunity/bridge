@@ -40,6 +40,7 @@ cited where a rule exists because of a finding.
 13. [Runtime facts and what is still to verify](#13-runtime-facts-and-what-is-still-to-verify)
 14. [Open decisions](#14-open-decisions)
 15. [Review findings and where they are addressed](#15-review-findings-and-where-they-are-addressed)
+16. [Worked scenarios](#16-worked-scenarios)
 
 ---
 
@@ -441,7 +442,7 @@ compaction), bounded in work per call ([§5.11](#511-bounded-state-and-work)).
 | `blocked`, `blockedAt`, `blockDepositLimit` | Permanent block; `blockDepositLimit` attested after the vault block (H6) | — |
 | `migration` | New contract, new vault, effective time | — |
 | `slashReserveCs`, `reserveByRelayer` | Confiscated CS, in total and per slashed relayer (the prover's 10 % earmarked) | per slashed relayer, compacted with its record |
-| `vaultView` | Last values attested by `T` relayers: `userUsdt`, `nextDepositId`, signer-set nonce applied, block flag, bond ledger | fixed |
+| `vaultView` | Last values attested by `T` relayers: `userUsdt`, `nextDepositId`, `dailyCap`, signer-set nonce applied, block flag, bond ledger | fixed |
 
 `PendingMint` data = `(to, amount, maxCsPrice, bscTxHash)`; its hash is
 `keccak256(depositId, to, amount, maxCsPrice, bscTxHash)` over a fixed encoding.
@@ -503,7 +504,7 @@ relayer concerned, **A** anyone. All amounts are `BigDecimal` (Variant `v_big_de
 | `approveMint(depositId, to, amount, maxCsPrice, bscTxHash, version)` | R | [§5.7](#57-mint-approval-counting); `depositId < vaultView.nextDepositId + 256` and `< mintedBelow + 1024`; if blocked and `blockDepositLimit` is attested, `depositId < blockDepositLimit`. Returns `pending k`, `minted`, `done`, `mismatch` |
 | `deliverCs(wallet)` | A | Sends `csClaimable[wallet]` to `returnAddress(wallet)` in one emitted transfer (≤ 10⁸ CS); the caller pays the emitted transfer's fee through its `max_fee` (M8) |
 | `claimCs()` | U | `deliverCs(initiator)` |
-| `burnForBsc(amount, bscAddress)` | U | Not paused; `amount ≥ minWithdrawal`; `bscAddress` valid, not zero, not the vault. `bridgeFee` to the fund, burns `amount − bridgeFee`, records withdrawal `kind=0`. Returns the id |
+| `burnForBsc(amount, bscAddress)` | U | Not paused; `amount ≥ minWithdrawal`; `amount − bridgeFee ≤ vaultView.dailyCap` (a larger withdrawal is split by the user into several, so no single claim can exceed the daily cap); `bscAddress` valid, not zero, not the vault. `bridgeFee` to the fund, burns `amount − bridgeFee`, records withdrawal `kind=0`. Returns the id |
 | `migrate(amount, newCreditsAddress, fallbackBscAddress)` | U | Migration target effective; as `burnForBsc` with `kind=1`, recipient = registered new vault, `creditsTo` = `newCreditsAddress`, `fallback` = the user's own BSC address (H7); no bridge fee |
 | `getWithdrawal(id)`, `getWithdrawalsFrom(id, n)`, `getWithdrawalRoot(bucket)` | A | `@Getter` |
 
@@ -877,7 +878,7 @@ duplicates; every signer MUST be in the current signer set.
 |---|---|---|
 | `deposit(amount, creditsTo, maxCsPrice)` | user | Not paused, not `withdrawOnly`; `signers.length ≥ 3` (L5); every founder in `foundersInSet()` has `bondUsdt[founderWallet] ≥ 50 USDT` (N8); `amount` multiple of 10¹⁰ and ≥ `minDeposit`; `creditsTo ≠ 0`; `userUsdt + amount ≤ cap`. Pulls USDT measuring the balance delta. Emits `Deposit(id, from, amount, creditsTo, maxCsPrice)` |
 | `claim(Claim, sigs)` | anyone | **While fully paused** (D9): refused. **While paused** (D2, N2): paid only if `kind = 0`, `amount < delayThreshold`, the H3 test passes (a whitelist majority among the signatures, or `undelayedWindow + amount ≤ delayThreshold`) and the rolling daily cap allows it; otherwise the call reverts, is not queued and does not mark `claimed`; both windows are updated as in normal mode. **Not paused:** not claimed; `threshold()` valid signatures; `kind 1` rules below. If the rolling daily cap would be exceeded, the claim is queued (M4) instead of reverting. If the signatures include fewer than `floor(W/2)+1` whitelisted signers (`W` = whitelisted members of the signer set; `W = 0` always counts as fewer) and `undelayedWindow + amount > delayThreshold`, it is queued for 24 h (H3). Else paid. Marks `claimed[id]` |
-| `executeQueued(count)` | anyone | Not paused; pays queued claims in FIFO order whose unlock time has passed, within the daily cap |
+| `executeQueued(count)` | anyone | Not paused; walks the queue in FIFO order and pays each claim whose unlock time has passed and that fits in the rolling daily cap; a claim that does not fit yet keeps its place but does not block the later ones; a claim above `dailyCap` (only possible if the cap was lowered after the burn) is paid when the rolling window is otherwise empty |
 | `updateSigners(SignerSet, sigs)` | anyone | `threshold()` of the current signers; `nonce = signerNonce + 1`; new set non-empty, sorted, ≤ 64; sets `removedAt` for removed signers; `foundersToAdd` only while not `foundersFrozen`, each in the new set; `freezeFounders` sets `foundersFrozen`. Founders leave the founder set only by their own `FounderRemoval` or a matured removal |
 | `requestFounderRemoval(FounderRemoval, sigs)` | anyone | Signed by the founder alone: immediate. Signed by `threshold()` instead: effective after 30 days unless cancelled by a majority of founders |
 | `setWhitelist(Whitelist, sigs)` | anyone | Normal mode: a majority of `foundersInSet()`, immediate. Fallback mode (`foundersBelowTwoSince` older than 30 days): more than half of all signers, effective after 7 days |
@@ -1031,7 +1032,9 @@ contracts treat as a duplicate.
 2. Relayers sign `Claim(id, 0, 0xBob, 99.95e18, 0, 0)` once its block is deep enough, and publish.
 3. The claim page fetches `T` signatures and Bob sends `claim`. Without a whitelist majority among
    the signatures and above the rolling 1,000 USDT, it is queued for 24 hours, then
-   `executeQueued`. Above the daily cap it is queued until the window allows it.
+   `executeQueued`. If the rolling daily cap is full it waits in the queue until the window
+   allows it, without blocking smaller claims behind it. A single withdrawal can never exceed the
+   daily cap: larger amounts are split into several burns.
 
 ### 8.3 Swap
 
@@ -1591,3 +1594,117 @@ Re-review of the owner's decisions (`docs/reviews/2026-11-06-decisions-re-review
 | N11 conversion default | §8.1 |
 | N12 bootstrap arithmetic, founder clock | §5.8 `link`, §5.9, §5.14 steps 2 and 5 |
 | Inconsistencies 1–19 | §5.1 `link`/`state` (1), §5.8 (2), §5.4/§5.12 (3), §5.4/§5.10 (4), §5.4 `withdrawBond` (5), §6/§6.3 (6), §5.12/§8.10 (7), §3.3/§9/§12.4 (8), §3.1 (9), §7.4 (10), §11 (11), §9 (12), §8.4 (13), §5.1/I5 (14), §5.3 (15), §5.4/§5.12 (16), §12 (17), this table (18), §2.1/§11 (19) |
+
+---
+
+## 16. Worked scenarios
+
+Two short stories that follow the money. They use the initial parameters: bridge fee 0.05 csUSDT
+each way, conversion 2 % of a deposit (between 1 and 20 csUSDT), swap fee 0.1 % paid by the taker,
+price band −5 % / +20 %, delay threshold 1,000 USDT, daily cap 2,000 USDT. Amounts are rounded;
+the contract keeps 8 decimals for csUSDT and 6 for CS. Transaction fees in CS and BSC gas are left
+out: every user pays their own.
+
+### 16.1 Three relayers: the basic cycle
+
+**Cast.** Relayers R1, R2, R3 (the three founders; `N = 3`, so `T = 2` and `U = 2`). Bob holds CS
+and wants dollars. Alice and Carol hold USDT on BSC and want CS. The relayers voted a
+conservative price of 0.020 csUSDT per CS, so on day 1 the reference price is 0.020 and orders
+must lie between 0.019 and 0.024.
+
+| Step | What happens | USDT (BSC) | csUSDT (Credits) | CS (Credits) |
+|---|---|---|---|---|
+| 1 | Bob sends 50,000 CS to the contract with the note `ask 0.020` | — | — | Bob → contract escrow: 50,000 |
+| 2 | Alice calls `deposit(100 USDT, her Credits wallet)` on the vault: deposit id 0 | Alice → vault: 100 | — | — |
+| 3 | R1 and R2 read deposit 0 in a finalized block and send `approveMint`. R3 is offline. Two approvals = `T`: the contract mints | — | 100 minted: 0.05 fee → fund; 1.999 spent on Alice's conversion | — |
+| 3a | The conversion buys from Bob's ask at 0.020 | — | ≈ 1.997 → Bob; ≈ 0.002 swap fee → fund; ≈ 97.95 → Alice | escrow → Alice (claimable): ≈ 99.85 |
+| 4 | R3 comes back and approves deposit 0: answer `done`, nothing happens | — | — | — |
+| 5 | Alice calls `claimCs()`: she now has CS to pay Credits fees | — | — | contract → Alice's wallet: ≈ 99.85 |
+| 6 | Carol deposits 500 USDT (id 1); R2 and R3 approve | Carol → vault: 500 | 500 minted: 0.05 → fund, ≈ 9.99 → Bob, ≈ 0.01 → fund, ≈ 489.95 → Carol | escrow → Carol: ≈ 499.45 |
+| 7 | Carol calls `buy` for 10,000 CS at up to 0.020 | — | Carol → Bob: 200; Carol → fund: 0.20 | escrow → Carol: 10,000 |
+| 8 | Bob calls `burnForBsc(200, 0xBob)`: withdrawal id 0 | — | 0.05 → fund; 199.95 burned | — |
+| 9 | Once the burn is 30 blocks deep, R1 and R3 sign `Claim(id 0, 0xBob, 199.95)` and publish the signatures | — | — | — |
+| 10 | Bob opens the claim page, which collects 2 signatures, and sends `claim` on BSC. 199.95 is below 1,000: paid at once | vault → Bob: 199.95 | — | — |
+
+**After step 10.**
+
+| Who | USDT (BSC) | csUSDT | CS |
+|---|---|---|---|
+| Vault (users' USDT) | 400.05 | — | — |
+| Alice | — | ≈ 97.95 | ≈ 99.85 |
+| Carol | — | ≈ 289.75 | ≈ 10,499.45 |
+| Bob | +199.95 | ≈ 11.99 | ask left: ≈ 39,400.70 in escrow |
+| Fee fund | — | ≈ 0.36 | — |
+| **csUSDT in circulation** | | **400.05** | |
+
+The main invariant holds: 400.05 csUSDT in circulation = 400.05 USDT of users in the vault.
+
+**Rewards at the end of the epoch.** In every hour slot the contract (`buybackTick`, called by the
+relayers) spends 1/168 of the epoch's fund on the lowest asks, here Bob's. With a fund of 0.36
+csUSDT it buys ≈ 18 CS over the week. `closeEpoch` gives ≈ 6 CS to each relayer that took part
+in at least 80 % of the work: R1, R2 and R3 (R3 missed one deposit out of two, but its later
+approval and its hourly digests count). Each share goes 20 % to the relayer's owner and 80 % to
+its delegators in proportion to their delegation. With more traffic the same rule gives
+proportionally more.
+
+**What each actor needed.** Alice and Carol: BNB for the BSC gas of `deposit`; no CS beforehand,
+the conversion gave them some. Bob: CS for his ask and his burn, BNB for the `claim`. Relayers: a
+little CS for each approval (≈ 0.02 CS), nothing for signatures.
+
+### 16.2 Seven relayers: when something goes wrong
+
+**Cast.** R1, R2, R3 are the founders and form the whitelist; R4–R7 joined later with their own
+bonds. `N = 7`, so `T = 4` and `U = max(4, ceil(14/3)) = 5`; a whitelist majority is 2 of the 3
+founders. Erin and Frank are users; Grace sells CS.
+
+**A. A deposit with one relayer offline and one wrong.**
+
+1. Erin deposits 1,500 USDT. R5 is offline. R7 sends `approveMint` with amount 1,600 (a bug or a
+   lie).
+2. R1, R2, R4 and R6 send the correct data: 4 identical approvals = `T`, so the contract mints
+   1,500 csUSDT. Erin receives ≈ 1,479.95 csUSDT and the CS bought with 20 csUSDT (the
+   conversion maximum).
+3. R7's approval is an orphan: it does not block anything, it gives R7 a mark. Three marks in 7
+   days make R7 inactive (no bond lost).
+
+**B. A large withdrawal.**
+
+1. Erin burns 1,200 csUSDT (≤ the 2,000 daily cap, so allowed as one withdrawal); net 1,199.95.
+2. If the signatures Erin presents include at least 2 founders (say R1, R2, R4, R6), the claim is
+   paid at once: the whitelist vouches for it.
+3. If they come only from R4, R5, R6, R7, the claim waits 24 hours in the queue. Every relayer
+   checks it against Credits during that time; nothing is wrong, so anyone calls `executeQueued`
+   after 24 hours and Erin is paid.
+4. A withdrawal of 5,000 csUSDT would be refused on Credits: Erin splits it into three burns
+   within the daily cap.
+
+**C. A false signature.**
+
+1. R7 signs, alone, a claim for 900 USDT to its own address with a withdrawal id that Credits
+   never recorded. The vault needs 4 signatures, so nothing is paid.
+2. Anyone who sees that signature (it is published like the others) calls
+   `proveFalseSignature` on Credits. The Java contract recovers R7's key from the signature,
+   finds no matching record, and slashes R7 at once: R7 leaves the active set and the signer set;
+   its bond (CS on Credits, USDT on the vault) goes to the slash reserve, 10 % of the CS earmarked
+   for the prover.
+3. R7 has 30 days to appeal. The reserve moves only by a two-thirds vote: `ceil(2 × 6 / 3) = 4`
+   of the 6 remaining relayers. Now `N = 6`, `T = 4`, `U = 4`.
+
+**D. A pause.**
+
+1. R1's watchdog sees csUSDT in circulation above the USDT in the vault and pauses both chains.
+2. Deposits, mints and large withdrawals stop. Frank can still withdraw 300 csUSDT: small
+   withdrawals continue within the daily cap.
+3. R3 also pauses: two distinct relayers, so it becomes a full pause and small withdrawals stop
+   too.
+4. The relayers find the cause. `U` relayers approve the unpause on both chains. If they declare
+   the pause unfounded, the pauser becomes inactive for 30 days.
+
+**E. The price band.**
+
+1. The reference price is 0.020. Grace, in a hurry, tries to sell at 0.015: refused (below 0.019).
+   She sells at 0.019.
+2. That day the trades of at least 100 csUSDT average 0.0195, so tomorrow's reference is 0.0195
+   and the floor 0.0185. The price can fall, but at most 5 % a day.
+3. If for 3 days no trade of at least 100 csUSDT happens, the reference starts falling 5 % a day,
+   so a price nobody accepts cannot freeze the market.

@@ -101,7 +101,7 @@ values of [§11](#11-parameters).
 
 | Term | Meaning |
 |---|---|
-| **Relayer** | A Credits full node with the relayer software: it reads both chains, approves mints on Credits, signs withdrawals for BSC, and watches. It holds a Credits key and a BSC signing key. |
+| **Relayer** | A Credits full node with the relayer software: it reads both chains, approves mints on Credits, signs withdrawals for BSC, and watches. It holds a Credits operator key with a little CS, a BSC signing key with no funds, and a small BSC gas wallet with BNB ([§7.8](#78-keys)). |
 | **Node wallet**, **owner wallet** | The wallet of the relayer's node, and the wallet of the person behind it (they receive the owner share of rewards). |
 | **Active set**, **`N`** | The relayers currently allowed to approve and sign; `N` is their number. |
 | **Threshold `T`** | How many relayers must agree: `max(2, min(floor(N/2) + 1, 7))`, so 2 of 3, 3 of 4 or 5, …, 7 from 13 relayers up. |
@@ -1002,7 +1002,20 @@ consumed the slot yet (the slot also runs lazily at the start of any state-chang
 ### 7.8 Keys
 
 - Keys never appear in code, repositories or logs. Files mode `0600`, owned by the relayer user.
-- The BSC signer key is used only for EIP-712 signatures; the relayer needs no BNB.
+- A relayer uses up to five keys or addresses, kept apart so that a compromised server cannot move
+  its bond:
+
+  | Key or address | Chain | Holds funds | Where | Used for |
+  |---|---|---|---|---|
+  | Node wallet | Credits | the delegations it receives; CS for the bond | offline when possible | registering, rotating keys, leaving, withdrawing the CS bond |
+  | Operator key | Credits | a little CS (≈ 0.02 CS per approval) | relayer server | `approveMint`, attestations, digests, votes, `buybackTick`, pause |
+  | BSC signer (`bscSigner`) | BSC | none | relayer server | EIP-712 signatures only (claims, signer sets, caps, pause, bond release and slash); signing costs nothing |
+  | BSC gas wallet | BSC | a little BNB (≈ 0.01 BNB, to be measured on testnet) | relayer server or operator's machine | sending transactions that someone must pay for: `depositBond`, submitting signed updates (`updateSigners`, `setCap`, `slashBond`, `useReserve`, unpause), `pauseDirect`, `reclaimBond` |
+  | Bond return address (`returnTo`) | BSC | receives the USDT bond back | offline | fixed at the first `depositBond`; never used to sign |
+
+- The BSC signer MUST NOT hold funds and MUST differ from the gas wallet and from `returnTo`.
+  Submitting signed messages to the vault is open to anyone: a relayer without BNB still signs,
+  and another relayer or user pays the gas to submit; claims are always paid by the user.
 - The operator key MAY differ from the node wallet; the node wallet only registers, rotates and
   withdraws bonds and can be kept offline.
 

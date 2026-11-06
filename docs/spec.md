@@ -79,7 +79,7 @@ threshold of relayers unable to steal (see [§3](#3-trust-model)).
 | Credits contracts | One contract, `CusdtBridge`: token, bridge, relayer registry, bonds, order book, buyback, governance |
 | BSC contract | `UsdtVault`: deposits, claims with EIP-712 threshold signatures, signer set, founders, whitelist, caps, bonds |
 | Relayer eligibility | Credits full node whose wallet holds ≥ 1,000,000 CS of incoming 1-year delegations from at least 2 wallets other than the owner's |
-| Admission | Automatic: eligibility attested by the relayers' software, 7-day wait, no sponsors and no objection by incumbents (decision D3) |
+| Admission | Automatic: eligibility attested by the relayers' software, 7-day wait, no sponsors and no objection by incumbents (decision D3); refused only if it would break the cap bound (I18). In `Bootstrap`: applicants attest each other, no wait ([§5.14](#514-bootstrap)) |
 | Operational threshold | `T = max(2, min(floor(N/2) + 1, 7))`, `N` = active relayers |
 | Governance threshold | more than half of all active relayers, no cap of 7 |
 | Bonds | Founders: 100,000 CS + 50 USDT. Later entrants: value ≥ max(1,000 USDT, 10 % of user USDT in the vault), fixed at entry |
@@ -128,9 +128,10 @@ threshold of relayers unable to steal (see [§3](#3-trust-model)).
 | User | Deposit, withdraw, trade, migrate own funds, set own return address | Move anyone else's funds |
 | A single relayer | Approve, sign, pause both contracts within the pause limits ([§8.9](#89-pause-and-unpause)), propose, vote | Mint, pay a claim, unpause or change a setting alone |
 | A threshold `T` of relayers | Mint for a deposit, sign a claim, update the vault's signer set, attest values to the contract | Change a hard cap; move user USDT other than through claims; raise founders' bonds; release a bond of a relayer still in the vault's signer set; unpause alone (needs `U`, [§8.9](#89-pause-and-unpause)) |
-| More than half of active relayers | Change parameters within hard caps (7-day delay), admit versions, block permanently, register migration targets | Change code; exceed hard caps |
+| More than half of active relayers | Change parameters within hard caps (7-day delay), admit versions, block permanently, register migration targets, reject an applicant as ineligible | Change code; exceed hard caps; use the slash reserve |
+| Two thirds of active relayers (`yes ≥ ceil(2N/3)`) | Use the slash reserve: return a bond after an appeal, reimburse users, pay the prover (D4) | Anything else beyond a majority |
 | Majority of active founders | Change the trusted whitelist on the vault | Anything else beyond a normal relayer |
-| Anyone | Submit signatures to the vault, trigger epoch closes and status updates, submit a fraud proof, deliver claimable CS | — |
+| Anyone | Submit signatures to the vault, trigger buyback slots (`buybackTick`), epoch closes and status updates, submit a fraud proof, deliver claimable CS | — |
 
 ### 3.2 What is protected
 
@@ -153,8 +154,11 @@ threshold of relayers unable to steal (see [§3](#3-trust-model)).
      the vault cap, so draining the full cap takes at least 5 days;
    - **the 24-hour delay**: claims not signed by a whitelist majority wait 24 h once their
      cumulative amount in a rolling 24 h exceeds 1,000 USDT, whatever the size of each claim;
-   - **pause**: any honest relayer can pause during the delay; lifting a pause needs
-     `U = max(T, ceil(2N/3))` approvals, more than `T`;
+   - **pause** (D2): any honest relayer can pause; a pause stops deposits, mints, claims of
+     `delayThreshold` or more and the queue, but small claims continue under the same 24-hour
+     undelayed test and the daily cap, so a theft in progress is slowed to the normal rate
+     (1,000 USDT per 24 h without a whitelist majority, `dailyCap` with one), not stopped;
+     lifting a pause needs `U = max(T, ceil(2N/3))` approvals;
    - **slashing by proof**: the CS bonds of every signer of a false claim are confiscated, and
      a signer cannot recover its bond while it is still in the vault's signer set (C1, C2).
 
@@ -169,8 +173,9 @@ threshold of relayers unable to steal (see [§3](#3-trust-model)).
    version, block the bridge permanently and register a migration target. Users who disagree
    have 7 days to withdraw before a change applies; migration is never forced.
 4. **Value of slashed bonds.** CS has no reliable market price; slashed CS may be worth less than
-   the loss. Bonds held as cUSDT or USDT are recovered by a thief who drains the vault (C2), so
-   they count toward the entry requirement but not toward the cap bound.
+   the loss. USDT bonds on the vault can be largely recovered by a coalition that controls the
+   signer set (C2), so they count toward the entry requirement but not toward the cap bound;
+   cUSDT bonds are not accepted (D6).
 5. **Sybil relayers.** Disjoint-wallet rules raise the cost of one person running several
    relayers; they cannot prove that two wallets belong to different people. The founder-phase
    trade rule ([§5.9](#59-order-matching)) can be met by one person with two wallets.
@@ -179,10 +184,17 @@ threshold of relayers unable to steal (see [§3](#3-trust-model)).
 7. **Credits reorganisations deeper than the signing depth** ([§7.4](#74-withdrawal-loop)) can make
    an honest signature look false; the proof rules give honest relayers a defence (M2), but a
    claim already paid for a burn that a reorganisation removed breaks I1 by its amount.
+8. **The reward fund** (N3). The buyback runs in hourly slices without a price limit (D1). A
+   persistent manipulator who empties the cheap asks before each slot can capture most of an
+   epoch's fund; the slices and the lazy slot execution only raise the cost and give honest
+   sellers a chance every hour. User funds are not affected.
 
 The bound on the loss from (1), after the founder phase:
 `vault cap ≤ Σ bondCs of the smallest set of active relayers able to reach T × conservative price`,
-checked by the Credits contract at every cap proposal and execution and attested to the vault
+checked by the Credits contract at every activation of a relayer (I18: an activation that would
+break it is refused), at every cap proposal and execution, and lazily on every state change; a
+lazy check that fails (conservative price lowered, relayers leaving) creates a risk-lowering
+"lower cap" proposal automatically ([§8.7](#87-governance)). The cap is attested to the vault
 ([§6.3](#63-methods) `setCap`).
 
 ---
@@ -263,7 +275,9 @@ compaction), bounded in work per call ([§5.11](#511-bounded-state-and-work)).
 
 | Field | Content | Bound |
 |---|---|---|
-| `cfg` | Immutable deployment constants: BSC chain id, vault address, EIP-712 domain separator, hard caps ([§11](#11-parameters)), deploy time, initial relayers | fixed |
+| `cfg` | Immutable deployment constants: BSC chain id, hard caps ([§11](#11-parameters)), deploy time | fixed |
+| `state` | `Bootstrap`, `AwaitingVault` or `Normal` ([§5.14](#514-bootstrap)); `normalSince` | — |
+| `link` | Vault address, EIP-712 domain separator, hash of the vault's initial signer set; set once by the link attestation ([§5.14](#514-bootstrap)) and used by `proveFalseSignature` | fixed |
 | `params` | Current governable parameters | fixed size |
 | `balances: Map<String, BigDecimal>` | cUSDT balances (free); a zero balance is removed | one per holder (each costs its creator a mint or transfer) |
 | `allowed` | Allowances, ERC-20 semantics; zero removed | per holder |
@@ -273,13 +287,13 @@ compaction), bounded in work per call ([§5.11](#511-bounded-state-and-work)).
 | `withdrawals` | Recent records by id: kind, from, BSC recipient, fallback, net amount, time, `hashStruct(Claim)` | the last 1,024 ids in full; older ids only in bucket roots |
 | `withdrawalRoots: List<bytes32>` | Merkle root of each completed bucket of 1,024 withdrawal hashes | 32 bytes per 1,024 withdrawals (C3) |
 | `nextWithdrawalId: long` | Sequential | — |
-| `relayers: Map<Long, Relayer>` | Relayer records ([§5.3](#53-relayer-record)) | ≤ 64 non-`Exited` records; `Exited` records compacted to `signerHistory` |
+| `relayers: Map<Long, Relayer>` | Relayer records ([§5.3](#53-relayer-record)) | ≤ 64 records that are not `Exited` or `Cancelled`; `Exited` and `Cancelled` records compacted to `signerHistory`; `Slashed` records compacted 30 days after the slash once no reserve proposal concerning them is open (N10) |
 | `signerHistory: Map<String, SignerUse>` | Every BSC signer key ever registered → relayer id, valid from/until (M1) | one per key; keys cannot be reused |
 | `signerSets: List<SignerSetRecord>` | Every vault signer set by nonce: signers, founders to add, freeze flag, hash (underspecified 3) | the last 64 sets in full, older as hashes |
 | `asks`, `bids: TreeMap<PriceKey, Order>` | Order book, price then id | ≤ 2,000 open orders in total, ≤ 20 per wallet, minimum size 10 CS and 0.10 cUSDT (C3) |
 | `lastPrice`, `dailyStats[8]` | Last fill price; per-day CS and cUSDT volumes for the 7-day VWAP | fixed |
 | `buybackFund: BigDecimal` | cUSDT from fees, not yet spent | — |
-| `epochFund`, `sliceBudget`, `lastTickSlot` | Fund fixed at the epoch start, its 1/168 hourly slice, last hour slot spent | fixed |
+| `epochFund`, `sliceBudget`, `epochStart`, `lastSlot` | `epochFund` is the part of `buybackFund` reserved for the current epoch's slices (a sub-ledger, not a separate balance: I5 counts `buybackFund` once); its 1/168 hourly slice; start of the epoch; last hour slot consumed (N3) | fixed |
 | `csClaimable: Map<String, BigDecimal>` | CS owed to wallets (conversions, rewards, refunds) | one per wallet; claims below 0.001 CS stay in dust |
 | `returnAddress: Map<String, String>` | Wallet → its return address for CS | one per wallet that set one |
 | `csLiabilities` | Sum of all CS the contract owes | — |
@@ -294,7 +308,7 @@ compaction), bounded in work per call ([§5.11](#511-bounded-state-and-work)).
 | `pauseHistory: Map<Long, Long>` | Relayer id → time of its last pause | per relayer |
 | `blocked`, `blockedAt`, `blockDepositLimit` | Permanent block; `blockDepositLimit` attested after the vault block (H6) | — |
 | `migration` | New contract, new vault, effective time | — |
-| `slashReserveCs` | Confiscated CS | — |
+| `slashReserveCs`, `reserveByRelayer` | Confiscated CS, in total and per slashed relayer (the prover's 10 % earmarked) | per slashed relayer, compacted with its record |
 | `vaultView` | Last values attested by `T` relayers: `userUsdt`, `nextDepositId`, signer-set nonce applied, block flag, bond ledger | fixed |
 
 `PendingMint` data = `(to, amount, maxCsPrice, bscTxHash)`; its hash is
@@ -318,7 +332,7 @@ contract state under a sequential id and exposed by `@Getter` methods:
 | `nodeWallet`, `operator`, `ownerWallet` | [§4.1](#41-identities-of-a-relayer) |
 | `bscSigner` | Current signer key; every past key stays in `signerHistory` |
 | `signatureUrl` | HTTPS base URL where it publishes signatures and digests |
-| `status` | `Applied`, `Active`, `Inactive`, `Exiting`, `Exited`, `Slashed`, `Rejected` |
+| `status` | `Applied`, `Active`, `Inactive`, `Exiting`, `Exited`, `Slashed`, `Rejected`, `Cancelled` (an application withdrawn by `cancelApplication`) |
 | `founder` | Applied while the founder phase was open |
 | `bondCs` | CS held by this contract |
 | `bondUsdtOnBsc` | USDT on the vault attested by `T` relayers (entry requirement only) |
@@ -327,7 +341,8 @@ contract state under a sequential id and exposed by `@Getter` methods:
 | `exitNonce` | Signer-set nonce of the first set without this relayer |
 | `eligibleSince`, `ineligibleSince` | Delegation status from attestations |
 | `version` | Last version hash used |
-| `participation`, `orphans`, `divergences` | Counters for the current windows |
+| `participation`, `orphans`, `divergences` | Counters for the current windows; divergences include eligibility attestations (N5) |
+| `slashedAt`, `appealHash` | Slash time and the hash of the published appeal evidence (D4) |
 
 ### 5.4 Methods
 
@@ -364,17 +379,18 @@ relayer concerned, **A** anyone. All amounts are `BigDecimal` (Variant `v_big_de
 
 | Method | Caller | Rules |
 |---|---|---|
-| `applyRelayer(operator, ownerWallet, bscSigner, signatureUrl, version)` | W | Not blocked; not already a relayer; `bscSigner` never registered before (M1); ≤ 64 non-exited relayers; bond already paid by the same wallet ([§5.5](#55-incoming-cs-payable) `bond`, and `depositBond` on the vault attested as `bondUsdtOnBsc`) covering `bondRequired` computed now ([§5.10](#510-bond-required-at-entry)); founder if the founder phase is open. Status `Applied` |
-| `attest(period, kind, payload, version)` | R | Attestations of facts the contract cannot read ([§5.8](#58-attestations)): eligibility, payee lists, vault view, signer set applied, block limit, bond on BSC |
-| `activate(relayerId)` | A | After 7 days, eligibility and bond attested, not rejected, `N < 64`. Status `Active`; a new signer set is recorded |
-| `activateBootstrap()` | A | State `Bootstrap`, at least 3 applicants each attested eligible by more than half of the other applicants, founder bonds paid: all of them become `Active` founders; state `AwaitingVault` ([§5.14](#514-bootstrap)) |
+| `applyRelayer(operator, ownerWallet, bscSigner, signatureUrl, version)` | W | Not blocked; not already a relayer; `bscSigner` never registered before (M1); ≤ 64 relayers that are not `Exited` or `Cancelled`; bond already paid by the same wallet ([§5.5](#55-incoming-cs-payable) `bond`, and, outside `Bootstrap`, `depositBond` on the vault attested as `bondUsdtOnBsc`) covering `bondRequired` computed now ([§5.10](#510-bond-required-at-entry)); in `Bootstrap` only the CS part is checked, the 50 USDT is enforced by the vault (§5.14 step 4); founder if the founder phase is open. Status `Applied` |
+| `attest(period, kind, payload, version)` | R (in `Bootstrap`: an `Applied` applicant, eligibility of other applicants only; in `AwaitingVault`: an active founder, `link` only) | Attestations of facts the contract cannot read ([§5.8](#58-attestations)): eligibility, payee lists, reserve payees, vault view, signer set applied, block limit, bond on BSC, link |
+| `activate(relayerId)` | A | State `Normal`; after 7 days, eligibility attested by `T`, bond attested, not rejected, `N < 64`; **throws `cap`** if, with the applicant in the active set, `Σ bondCs of the smallest T-set × conservativePrice < vaultView` cap (I18, N1; in the founder phase the bound is the founder cap rule instead). Status `Active`; a new signer set is recorded |
+| `activateBootstrap()` | applicant (N6) | State `Bootstrap`; at least 3 applicants each attested eligible by more than half of the other applicants, each with the 100,000 CS founder bond paid (the USDT part is enforced by the vault): all of them become `Active` founders; state `AwaitingVault` ([§5.14](#514-bootstrap)) |
+| `cancelApplication()` | W | Status `Applied`, at least 7 days after `applyRelayer`, any state (N5): status `Cancelled`, `bondCs` to `csClaimable`; the USDT bond is released on the vault without the `removedAt` condition (never a signer) |
 | `setOperator(op)`, `setSignatureUrl(url)`, `setOwnerWallet(w)`, `setReturnAddress(addr)` | W | Immediate |
 | `rotateSigner(bscSigner)` | W | New key never registered before; the old key stays in `signerHistory` and stays provable while any bond of this relayer is held; a new signer set is recorded |
-| `leave()` | W | Not paused (C1); status `Exiting`; a new signer set is recorded; `exitAt = now`, `exitNonce` = its nonce |
-| `withdrawBond()` | W | Not paused (C1); status `Exiting`, `Inactive`-and-leaving or `Rejected`; `now ≥ exitAt + 30 days + Σ pauses it started`; `vaultView` shows a signer set with nonce ≥ `exitNonce` applied on the vault and `now ≥ removedFromVaultAt + 30 days` (C2); if blocked, the end-of-life rule of [§8.10](#810-permanent-block-migration-and-end-of-life). Credits `bondCs` to `csClaimable`; marks `Exited` (the USDT bond is released on the vault by `releaseBond`) |
+| `leave()` | W | Not paused (C1); status `Exiting`; a new signer set is recorded; `exitAt = now`, `exitNonce` = its nonce. In `AwaitingVault` (N7): open, no signer set exists yet; if active founders fall below 3 the state returns to `Bootstrap` and the remaining founders return to `Applied` |
+| `withdrawBond()` | W | Not paused (C1). `Rejected`: 7 days after the rejection, no vault condition (never a signer, L2). `Exiting` that left in `AwaitingVault`: 7 days after `leave`, no vault condition (N7). Otherwise (`Exiting`, `Inactive`-and-leaving): `now ≥ exitAt + 30 days + Σ pauses it started`; `vaultView` shows a signer set with nonce ≥ `exitNonce` applied on the vault and `now ≥ removedFromVaultAt + 30 days` (C2); if blocked, the end-of-life rule of [§8.10](#810-permanent-block-migration-and-end-of-life). Credits `bondCs` to `csClaimable`; marks `Exited` (the USDT bond is released on the vault by `releaseBond`) |
 | `submitDigest(period, digestHash, version)` | R | Once per relayer per period ([§7.6](#76-state-digests)) |
-| `updateStatus(relayerId)` | A | Applies inactivity, delegation-drop and divergence rules ([§8.6](#86-inactivity-delegation-drop-divergence)) |
-| `proveFalseSignature(id, kind, to, amount, creditsTo, fallback, sigHex, merklePath)` | A | Every state (C1); [§8.8](#88-slashing-by-proof) |
+| `updateStatus(relayerId)` | A | Applies inactivity, delegation-drop, divergence and founder-bond rules ([§8.6](#86-inactivity-delegation-drop-divergence)) |
+| `proveFalseSignature(id, kind, to, amount, creditsTo, fallback, sigHex, merklePath)` | A | Every state once `link` is set (C1; before it no vault exists and no claim can be signed); [§8.8](#88-slashing-by-proof) |
 
 #### Order book
 
@@ -390,10 +406,10 @@ relayer concerned, **A** anyone. All amounts are `BigDecimal` (Variant `v_big_de
 
 | Method | Caller | Rules |
 |---|---|---|
-| `buybackTick()` | A | At most once per hour slot; spends at most the slot budget ([§8.4](#84-fees-buyback-and-rewards)) |
+| `buybackTick()` | A | Explicit trigger of the slot buyback, which also runs lazily at the start of every state-changing call when a new hour slot has begun; a slot is consumed by its first call ([§8.4](#84-fees-buyback-and-rewards), N3) |
 | `closeEpoch()` | A | After the epoch end; allocates the CS bought in the epoch; resumable ([§8.4](#84-fees-buyback-and-rewards)) |
 | `appeal(evidenceHash)` | W | Status `Slashed`, within 30 days of the slash; records the hash of the published evidence (D4) |
-| `propose(kind, key, value)` | R | Kinds: parameter, admit/retire version, conservative CS price, vault cap, permanent block, migration target, conflict resolution, slash reserve use (passes only with two thirds of active relayers, D4). Rejected if outside the hard caps |
+| `propose(kind, key, value)` | R | Kinds: parameter, admit/retire version, conservative CS price, vault cap, permanent block, migration target, conflict resolution, slash reserve use (passes only with `yes ≥ ceil(2N/3)`, D4; carries the payee list of a `reservePayees` attestation, ≤ 100 payees per proposal). Rejected if outside the hard caps. The contract itself creates a "lower cap" proposal when the lazy bound check fails (N1) and a "pay prover" proposal 30 days after a slash without appeal (N10) |
 | `vote(proposalId, yes)` | R | One vote per active relayer; changeable until the voting end |
 | `execute(proposalId)` | A | [§8.7](#87-governance) timing; pass condition re-checked at execution |
 | `pause(reason)` | R | Within the pause limits of [§8.9](#89-pause-and-unpause) |
@@ -450,7 +466,9 @@ At each `approveMint` by relayer `r` for `(depositId, data)` (H1):
 4. When the count reaches `T` (evaluated now): mint ([§5.7.1](#571-mint-and-conversion)).
    Approvals for other hashes of that id become orphans for their approvers.
 5. If, for an id already minted, another hash later collects `T` approvals: automatic pause with
-   reason `mint-mismatch`, since `T` relayers disagree with `T` others.
+   reason `mint-mismatch`, since `T` relayers disagree with `T` others. This is a **full** pause on
+   Credits: unlike a single relayer's alarm (D2), small burns stop too, and relayers sign nothing
+   until it is resolved (N2, N9).
 6. Pending entries older than 30 days without reaching `T` are dropped lazily; their approvers
    get no mark (the deposit may still be minted later by fresh approvals).
 
@@ -475,7 +493,9 @@ The mint never fails because of the order book or of a CS delivery.
 
 The contract cannot read BSC nor delegations. Facts it needs are attested by relayers with
 `attest(period, kind, payload, version)`; a fact is accepted when `T` active relayers have
-submitted the same `(period, kind, payload)` (underspecified 2, 7):
+submitted the same `(period, kind, payload)` (underspecified 2, 7), with the exceptions below.
+In `Bootstrap` the attesters are the applicants and in `AwaitingVault` the active founders
+([§5.14](#514-bootstrap)).
 
 | Kind | Payload | Period |
 |---|---|---|
@@ -483,9 +503,18 @@ submitted the same `(period, kind, payload)` (underspecified 2, 7):
 | `eligibility` | relayer id, eligible (bool) | the day; delegations read at the Credits block with the greatest time ≤ day start |
 | `payees` | relayer id, list of ≤ 100 `wallet:amount` of the largest counted delegators, rounded down to whole CS | the epoch; read at the epoch start block |
 | `bscBond` | node wallet, USDT bond on the vault | when it changes |
+| `link` | vault address, BSC chain id, hash of the vault's initial signer set | once, in `AwaitingVault`; accepted when more than half of the active founders submit it (N12) |
+| `reservePayees` | slashed relayer id, purpose, list of ≤ 100 `wallet:amount` | once per reserve-use proposal ([§8.8](#88-slashing-by-proof)) |
 
 If `T` identical payee lists are not reached by the epoch close, the relayer's whole share goes
 to its owner wallet for that epoch. Payloads are capped at 4 KB.
+
+Eligibility of an applicant (N5): accepted (eligible) at `T` identical attestations; rejected
+(ineligible) only when **more than half of active relayers** attest it ineligible, so that fewer
+than half cannot keep anyone out. An eligibility attestation that differs from one accepted by
+`T` identical submitters for the same `(period, relayer)` earns a divergence mark, like a
+digest ([§7.7](#77-code-verification)); eligibility attestations for open applications count in
+participation ([§8.4](#84-fees-buyback-and-rewards)).
 
 ### 5.9 Order matching
 
@@ -499,20 +528,25 @@ to its owner wallet for that epoch. Payloads are capped at 4 KB.
 - At most 50 fills per call; the rest of the order is returned unspent.
 - The founder phase closes at the first single `buy` (not a conversion, not the buyback) in which
   the buyer paid ≥ 100 cUSDT in total and the buyer differs from every seller filled; or 6 months
-  after deploy; or when there are 7 active relayers; whichever comes first.
+  after the contract reached `Normal` (N12); or when there are 7 active relayers; whichever comes
+  first.
 
 ### 5.10 Bond required at entry
 
 Computed when `applyRelayer` is called and fixed for that relayer:
 
-- founder phase open: 100,000 CS in `bondCs` **and** 50 USDT on the vault;
+- founder phase open: 100,000 CS in `bondCs` **and** 50 USDT on the vault (in `Bootstrap` the
+  USDT part is enforced by the vault after its deploy, [§5.14](#514-bootstrap));
 - otherwise: CS in `bondCs` plus USDT on the vault (at least 50), in any proportion, such that
   `bondCs × entryPrice + bondUsdtOnBsc ≥ max(1000, newBondRate × vaultView.userUsdt)`
   (decision D6: no cUSDT),
   where `entryPrice = min(conservativePrice, 7-day VWAP)` (H5).
 
 A later rise of the requirement never applies to existing relayers. For the cap bound
-([§3.3](#33-what-is-not-protected)) only `bondCs` counts, at the current conservative price.
+([§3.3](#33-what-is-not-protected)) only `bondCs` counts, at the current conservative price, and
+`activate` refuses an applicant whose entry would put the smallest `T`-set below the cap (I18,
+N1): an applicant with a mostly-USDT bond is admitted while the bound holds and is told to add
+CS otherwise. A minimum CS share per entrant is open decision D8.
 
 ### 5.11 Bounded state and work
 
@@ -530,23 +564,39 @@ A later rise of the requirement never applies to existing relayers. For the cap 
 
 (underspecified 4)
 
-In the `Bootstrap` and `AwaitingVault` states ([§5.14](#514-bootstrap)) only the bootstrap methods listed there and getters are open.
+Bootstrap states ([§5.14](#514-bootstrap)):
+
+| Method | `Bootstrap` | `AwaitingVault` |
+|---|---|---|
+| getters | yes | yes |
+| `payable` `bond`, `applyRelayer` | yes | no |
+| `deliverCs`, `claimCs`, `setReturnAddress` | yes | yes |
+| `attest` | eligibility of other applicants | `link` only, by active founders |
+| `activateBootstrap` | yes (an applicant) | — |
+| `cancelApplication` | yes, 7 days after applying | yes, for an applicant left in `Applied` |
+| `leave`, `withdrawBond` | — | yes (N7) |
+| `proveFalseSignature` | — (no vault yet) | — (no vault yet) |
+| everything else | no | no |
+
+After `Normal` is reached:
 
 | Method | Normal | Paused | Blocked | Blocked + migration |
 |---|---|---|---|---|
 | `transfer`, `transferFrom`, `approve` | yes | yes | yes | yes |
 | `approveMint` | yes | no | yes, ids < `blockDepositLimit` once attested | same |
-| `burnForBsc` | yes | only net amounts below `delayThreshold` (D2) | yes | yes |
+| `burnForBsc` | yes | only net amounts below `delayThreshold` (D2); none during a `mint-mismatch` pause | yes | yes |
 | `migrate` | — | no | — | yes |
 | `deliverCs`, `claimCs`, `setReturnAddress` | yes | yes | yes | yes |
 | `payable` `ask`/`sell`, `placeBid`, `buy` | yes | no | no | no |
 | `payable` `bond`, `applyRelayer`, `activate` | yes | no | no | no |
+| `cancelApplication` | yes | yes | yes | yes |
+| `appeal` | yes | yes | yes | yes |
 | `cancelAsk`, `cancelBid` | yes | yes | yes | yes |
 | `leave`, `withdrawBond` | yes | no | yes (end-of-life rule) | yes |
 | `proveFalseSignature` | yes | yes | yes | yes |
 | `attest`, `submitDigest`, `updateStatus` | yes | yes | yes | yes |
 | `propose`, `vote`, `execute` | yes | yes (only risk-lowering kinds execute) | yes | yes |
-| `buybackTick` | yes | no | yes | yes |
+| `buybackTick` (and the lazy slot) | yes | no | no: the buyback stops at the block ([§8.10](#810-permanent-block-migration-and-end-of-life)) | no |
 | `closeEpoch` | yes | allocation of what was bought | yes | yes |
 | `pause`, `approveUnpause` | yes | yes | yes | yes |
 
@@ -564,23 +614,41 @@ bridge starts only with at least 3 relayers.
 
 1. **Deploy on Credits.** Anyone (in practice one project member) deploys `CusdtBridge` with no
    relayers, no owner and no constructor privileges. It starts in state `Bootstrap`: no mints, no
-   burns, no orders; only `bond`, `applyRelayer`, `attest` among applicants, `cancelApplication`
-   and getters.
+   burns, no orders; only the methods of the bootstrap table in
+   [§5.12](#512-methods-by-contract-state).
 2. **Founders apply.** Each candidate pays the founder bond (100,000 CS through `bond`) and calls
    `applyRelayer`. In `Bootstrap` there are no incumbents, so applicants attest each other's
    eligibility (the [§8.5](#85-relayer-admission) rules: 1M CS of 1-year delegations, donors,
    shares); an applicant counts as eligible when more than half of the other applicants attest
-   it. No 7-day wait in `Bootstrap`.
-3. **Activation on Credits.** When at least 3 applicants are eligible, anyone calls `activateBootstrap()`:
-   they become `Active` founders, the state becomes `AwaitingVault`. Fewer than 3: nothing
-   starts; an applicant may cancel and take its bond back after 7 days.
-4. **Vault deploy.** The vault is deployed after that, with constructor signers and founders
-   equal to the active set recorded on Credits (anyone can check this before using it), each
-   founder then deposits its 50 USDT with `depositBond`. The vault refuses deposits while it has
-   fewer than 3 signers or while any founder's 50 USDT bond is missing.
-5. **Link.** The founders attest the vault address on Credits (`T` attestations); from then on the
-   state is `Normal`. Both deploy transactions, the constructor arguments and the attestation are
-   published with the release.
+   it. No 7-day wait in `Bootstrap`. With exactly 3 applicants this means unanimity: one applicant
+   can hold up the other two until a fourth applies or it cancels (N12, accepted).
+3. **Activation on Credits.** When at least 3 applicants are eligible, an applicant (not anyone,
+   N6) calls `activateBootstrap()`: they become `Active` founders, the state becomes
+   `AwaitingVault`. Fewer than 3: nothing starts; an applicant may `cancelApplication()` and take
+   its bond back 7 days after applying.
+4. **Vault deploy.** The vault is deployed after that. Its constructor takes the founders as
+   `(signer, nodeWallet)` pairs equal to the active set recorded on Credits (anyone can check this
+   before using it). Each founder then deposits its 50 USDT with `depositBond(nodeWallet, …)`. The
+   vault refuses deposits while it has fewer than 3 signers or while a founder that is a signer
+   (`foundersInSet()`) has less than 50 USDT of bond (N8).
+5. **Link.** More than half of the active founders attest `link` (vault address, BSC chain id,
+   hash of the initial signer set) on Credits; the contract stores the vault address and the
+   EIP-712 domain separator from it, and the state becomes `Normal` (`normalSince` = now; the
+   6-month founder clock starts here, N12).
+6. **No vault ever linked (N7).** In `AwaitingVault` founders may `leave()` and withdraw their
+   bond 7 days later, without the vault conditions. If active founders fall below 3, the state
+   returns to `Bootstrap`, the remaining founders return to `Applied` and may cancel.
+7. **Founder without the USDT bond (N8).** If, 30 days after `Normal`, a founder's `bscBond`
+   attestation is below 50 USDT, `updateStatus` makes it `Inactive`; the next signer set removes
+   it from the vault.
+8. **Publication (N6).** A deploy cannot stop strangers from applying in `Bootstrap`: several
+   Sybil applicants with real delegations could reach "more than half of the others" without the
+   intended founders and activate themselves. The defence is operational: the Credits address is
+   published only together with the vault address and the founders' node wallets, after the link;
+   the release tells users to check the founders against `getRelayers()` and the vault's
+   constructor arguments. If a stranger activates first, the project redeploys and publishes the
+   new address; nothing of value was ever deposited. Stronger in-contract options are open
+   decision D10.
 
 The deployer gains nothing from deploying: no key in either contract, no fee, no vote it would
 not have as a relayer.
@@ -590,8 +658,9 @@ not have as a relayer.
 ## 6. BSC contract `UsdtVault`
 
 Solidity ≥ 0.8.24, no proxy, no owner. Uses OpenZeppelin `SafeERC20`, `ECDSA`, `EIP712`,
-`ReentrancyGuard`. Constructor: USDT token address, initial signers and founders, initial cap and
-daily cap, Credits contract address (informational).
+`ReentrancyGuard`. Constructor: USDT token address, the founders as `(signer, nodeWallet)` pairs
+(all initial signers are founders, [§5.14](#514-bootstrap)), initial cap and daily cap, Credits
+contract address (informational).
 
 ### 6.1 State
 
@@ -604,12 +673,13 @@ daily cap, Credits contract address (informational).
 | `unpauseThreshold()` | `max(threshold(), ceil(2n/3))` |
 | `founders`, `isFounder`, `foundersFrozen` | Founder set; only shrinks once frozen |
 | `foundersInSet()` | Founders that are signers |
+| `founderWallet[address]` | Node wallet of each founder signer, to match `depositBond` (N8) |
 | `whitelist`, `isWhitelisted` | Trusted signers for immediate large claims |
 | `foundersBelowTwoSince` | Time `foundersInSet()` fell below 2 (0 otherwise) |
 | `nextDepositId` | Sequential |
 | `userUsdt` | User funds: deposits − claims − migrations |
 | `bondUsdt[bytes32 nodeWallet]`, `bondSigner[bytes32]` | Relayer bonds apart from user funds, and the signer key of each bond |
-| `reserveUsdt` | Slashed bonds |
+| `reserveUsdt`, `reserveOf[bytes32 nodeWallet]` | Slashed USDT bonds, in total and per slashed relayer |
 | `claimed[uint64]` | Withdrawal ids paid or queued |
 | `queue` | FIFO of queued claims `(id, to, amount, kind, creditsTo, fallback, unlockTime)` |
 | `cap`, `pendingCap`, `pendingCapTime` | Vault cap on `userUsdt` |
@@ -638,6 +708,7 @@ Domain: `EIP712Domain(string name,string version,uint256 chainId,address verifyi
 | `Unpause(uint64 nonce,bool unfounded)` |
 | `Block(uint64 nonce)` |
 | `Migration(uint64 nonce,address target)` |
+| `ReserveUse(uint64 nonce,uint8 purpose,bytes32 nodeWallet,address to,uint256 amount)` (purpose: 0 return to the slashed relayer, 1 reimburse a user, 2 prover; N4) |
 
 Java encoding of `hashStruct(Claim)` (used for the stored hash and in proofs):
 `keccak256(typeHash ‖ pad32(withdrawalId) ‖ pad32(kind) ‖ pad32(to) ‖ pad32(amountWei) ‖
@@ -653,8 +724,8 @@ duplicates; every signer MUST be in the current signer set.
 
 | Method | Who | Rules |
 |---|---|---|
-| `deposit(amount, creditsTo, maxCsPrice)` | user | Not paused, not `withdrawOnly`; `signers.length ≥ 3` (L5); `amount` multiple of 10¹⁰ and ≥ `minDeposit`; `creditsTo ≠ 0`; `userUsdt + amount ≤ cap`. Pulls USDT measuring the balance delta. Emits `Deposit(id, from, amount, creditsTo, maxCsPrice)` |
-| `claim(Claim, sigs)` | anyone | Not paused, except a `kind 0` claim below `delayThreshold` within the daily cap, which is paid also while paused (D2); not claimed; `threshold()` valid signatures; `kind 1` rules below. If the rolling daily cap would be exceeded, the claim is queued (M4) instead of reverting. If the signatures include fewer than `floor(W/2)+1` whitelisted signers (`W` = whitelisted members of the signer set; `W = 0` always counts as fewer) and `undelayedWindow + amount > delayThreshold`, it is queued for 24 h (H3). Else paid. Marks `claimed[id]` |
+| `deposit(amount, creditsTo, maxCsPrice)` | user | Not paused, not `withdrawOnly`; `signers.length ≥ 3` (L5); every founder in `foundersInSet()` has `bondUsdt[founderWallet] ≥ 50 USDT` (N8); `amount` multiple of 10¹⁰ and ≥ `minDeposit`; `creditsTo ≠ 0`; `userUsdt + amount ≤ cap`. Pulls USDT measuring the balance delta. Emits `Deposit(id, from, amount, creditsTo, maxCsPrice)` |
+| `claim(Claim, sigs)` | anyone | **While paused** (D2, N2): paid only if `kind = 0`, `amount < delayThreshold`, the H3 test passes (a whitelist majority among the signatures, or `undelayedWindow + amount ≤ delayThreshold`) and the rolling daily cap allows it; otherwise the call reverts, is not queued and does not mark `claimed`; both windows are updated as in normal mode. **Not paused:** not claimed; `threshold()` valid signatures; `kind 1` rules below. If the rolling daily cap would be exceeded, the claim is queued (M4) instead of reverting. If the signatures include fewer than `floor(W/2)+1` whitelisted signers (`W` = whitelisted members of the signer set; `W = 0` always counts as fewer) and `undelayedWindow + amount > delayThreshold`, it is queued for 24 h (H3). Else paid. Marks `claimed[id]` |
 | `executeQueued(count)` | anyone | Not paused; pays queued claims in FIFO order whose unlock time has passed, within the daily cap |
 | `updateSigners(SignerSet, sigs)` | anyone | `threshold()` of the current signers; `nonce = signerNonce + 1`; new set non-empty, sorted, ≤ 64; sets `removedAt` for removed signers; `foundersToAdd` only while not `foundersFrozen`, each in the new set; `freezeFounders` sets `foundersFrozen`. Founders leave the founder set only by their own `FounderRemoval` or a matured removal |
 | `requestFounderRemoval(FounderRemoval, sigs)` | anyone | Signed by the founder alone: immediate. Signed by `threshold()` instead: effective after 30 days unless cancelled by a majority of founders |
@@ -662,7 +733,8 @@ duplicates; every signer MUST be in the current signer set.
 | `setCap(Cap, sigs)` | anyone | `threshold()` signatures. Decreases immediate. Increases after 7 days, at most ×2 per step, for `cap` and `dailyCap` both. Always `dailyCap ≤ cap / 5`. While `foundersInSet() ≥ threshold()`: `cap ≤ 20,000 USDT` (H4) |
 | `depositBond(nodeWallet, signer, amount)` | relayer | Adds to `bondUsdt[nodeWallet]`, records `bondSigner`; not counted in `userUsdt` or the cap |
 | `releaseBond(BondRelease, sigs)` | anyone | `threshold()` signatures; `bondSigner[nodeWallet]` not a signer and `removedAt + 30 days` passed (C2, L9); pays `to` |
-| `slashBond(BondSlash, sigs)` | anyone | `threshold()` signatures; moves the bond to `reserveUsdt` |
+| `slashBond(BondSlash, sigs)` | anyone | `threshold()` signatures; moves the bond to `reserveUsdt` / `reserveOf` |
+| `useReserve(ReserveUse, sigs)` | anyone | `unpauseThreshold()` signatures (mirrors the two-thirds vote, N4); signed by relayers only after the Credits reserve-use proposal executed; `amount ≤ reserveOf[nodeWallet]`; pays `to` from the reserve, never from `userUsdt` or other bonds |
 | `pause(Pause, sig)` / `pauseDirect()` | one signer | `deadline` not passed (L6); limits of [§8.9](#89-pause-and-unpause) |
 | `unpause(Unpause, sigs)` | anyone | `unpauseThreshold()` signatures |
 | `block(Block, sigs)` | anyone | `threshold()` signatures. Sets `withdrawOnly` forever; records `blockedDepositId = nextDepositId` |
@@ -675,7 +747,7 @@ it is paid to `fallback` as a normal claim (H7). The new vault's `depositFromMig
 accept calls only from its registered predecessor and MUST pull the USDT with `transferFrom`
 measuring the balance delta (M9).
 
-No function transfers user USDT except `claim`/`executeQueued`.
+No function transfers user USDT except `claim`/`executeQueued`. Reserve funds leave only through `useReserve`.
 
 ### 6.4 Reentrancy and tokens
 
@@ -731,7 +803,9 @@ Every cursor and record is written to the store before the corresponding action 
 2. Check the record against the contract's stored hash; build `Claim`; sign; store with the
    block; publish `/<chainId>/<vault>/claims/<id>.json` with the data, the signature, the block
    and the version.
-3. Never sign while the Credits contract is paused, or if the watchdog fails.
+3. During a pause started by one relayer (D2), sign only withdrawals with a net amount below
+   `delayThreshold`, and only if the own watchdog passes. Sign nothing during an automatic
+   (`mint-mismatch`) pause or while the own watchdog fails ([§7.5](#75-watchdog-every-cycle)).
 
 ### 7.5 Watchdog, every cycle
 
@@ -750,8 +824,9 @@ timestamp ≤ period start, invariantOk)` and publishes the clear values. The co
 most common digest; a relayer whose digest differs from one that has at least `T` submitters
 gets a divergence mark.
 
-In the same loop each relayer calls `buybackTick()` once per hour slot if no one has yet (a
-second call in the slot is refused cheaply), and `closeEpoch()` after the epoch end.
+In the same loop each relayer calls `buybackTick()` early in each hour slot if no call has
+consumed the slot yet (the slot also runs lazily at the start of any state-changing call), and
+`closeEpoch()` after the epoch end.
 
 ### 7.7 Code verification
 
@@ -763,7 +838,8 @@ second call in the slot is refused cheaply), and `closeEpoch()` after the epoch 
    what runs.
 2. **Consensus on outputs.** Honest relayers compute the same data from the same chains; the
    contract mints on identical approvals and compares digests.
-3. **Automatic consequences.** Divergence in 3 of the last 24 digest periods, or more than 3
+3. **Automatic consequences.** Divergence (digests, and eligibility attestations, [§5.8](#58-attestations))
+   in 3 of the last 24 digest periods, or more than 3
    orphan approvals in 7 days → `Inactive` until back in line. A relayer made `Inactive` by
    divergence keeps its pause right and stays in the vault signer set for 7 days (M7). No
    slashing without proof.
@@ -789,8 +865,10 @@ contracts treat as a duplicate.
 
 ### 8.1 Deposit (BSC → Credits)
 
-1. User approves USDT and calls `deposit(100 USDT, creditsTo, maxCsPrice=0)` on the vault.
-2. Each relayer, after finality (≈ 1 s), calls `approveMint(id, to, 100, 0, txHash, version)`.
+1. User approves USDT and calls `deposit(100 USDT, creditsTo, maxCsPrice=0.03)` on the vault.
+   The deposit page fills `maxCsPrice` by default with a multiple of `lastPrice` read from the
+   contract (for example ×2, N11); 0 means no limit and is the user's explicit choice (D1).
+2. Each relayer, after finality (≈ 1 s), calls `approveMint(id, to, 100, 0.03, txHash, version)`.
 3. At `T` approvals for the same data: fee 0.05 to the fund; conversion budget = 2 % × 99.95 =
    1.999 cUSDT; CS bought from the lowest asks to `csClaimable[to]`; the rest credited as cUSDT.
 4. A relayer calls `deliverCs(to)`: the CS reach the user's wallet.
@@ -814,23 +892,33 @@ contracts treat as a duplicate.
 ### 8.4 Fees, buyback and rewards
 
 1. Bridge fees and swap fees accumulate in `buybackFund` (cUSDT).
-2. The buyback is spread over the epoch (decision D1: no price limit, small slices). At the start
-   of an epoch (7 days = 168 hour slots) the contract fixes `epochFund = buybackFund` and
-   `sliceBudget = epochFund / 168`; fees arriving during the epoch wait for the next one.
-   `buybackTick()`, callable by anyone at most once per hour slot (by block time), buys CS from
-   the lowest asks, oldest first, for at most `sliceBudget` (no fee on the buyback), at most 50
-   fills; an unspent slice (no asks, or fewer asks) stays in `buybackFund`. Relayers call it as
-   part of their loop ([§7](#7-relayer-process)). One manipulated slot can capture at most 1/168
-   of the epoch's fund, and other sellers have an hour to place lower asks.
-3. At `closeEpoch()` (every 7 days) the contract splits the CS bought during the epoch equally
-   among relayers active for the whole epoch with ≥ 80 % participation.
-3. Participation (underspecified 6) = approvals of the epoch's minted deposits within 10 minutes
-   of the mint, plus digests submitted, over the number of both; an epoch without deposits
-   counts digests only.
-4. Each relayer's share: `ownerShare` (20 %) to its owner wallet, the rest to the payees attested
+2. **Epoch bookkeeping.** An epoch is 7 days = 168 hour slots of block time. At the first
+   state-changing call after an epoch ends (whether or not `closeEpoch()` has run), the contract
+   rolls the epoch: `epochStart` advances by whole epochs, `epochFund` = the whole of
+   `buybackFund` (a sub-ledger of it, not a separate balance), `sliceBudget = epochFund / 168`.
+   Fees arriving during an epoch wait for the next one.
+3. **Slots (D1, N3).** At the start of every state-changing call, before the method body, if a
+   new hour slot has begun since `lastSlot`, the contract runs that slot's buyback: it buys CS
+   from the lowest asks, oldest first, for at most `sliceBudget`, with no price limit and no
+   swap fee, at most 25 fills, and sets `lastSlot`. The first call of a slot consumes it whether or
+   not anything was bought; skipped slots are not caught up. `buybackTick()` only triggers this
+   explicitly. The carrying call then does its own work within its own 50-fill bound. An unspent
+   slice stays in `buybackFund`.
+4. **What the slices achieve.** Because the slot runs before any other action in the slot, a
+   manipulator cannot empty the cheap asks and then trigger the slot in the same call or slot:
+   it has to empty them in the last block of the previous slot and win the race for the first
+   call of the new slot. A persistent manipulator can still capture much of an epoch's fund; the
+   slices only raise the cost and give honest sellers a chance every hour
+   ([§3.3](#33-what-is-not-protected) item 8).
+5. **`closeEpoch()`** (after the epoch end, resumable) splits the CS bought during the epoch
+   equally among relayers active for the whole epoch with ≥ 80 % participation.
+6. **Participation** (underspecified 6) = approvals of the epoch's minted deposits within 10
+   minutes of the mint, digests submitted, and eligibility attestations for open applications
+   (N5), over the number expected of each; an epoch without deposits counts the others only.
+7. Each relayer's share: `ownerShare` (20 %) to its owner wallet, the rest to the payees attested
    for that epoch ([§5.8](#58-attestations)) pro rata; the remainder to the owner. Credited to
    `csClaimable`.
-5. Whatever the slices did not spend carries over to the next epoch's fund.
+8. Whatever the slices did not spend carries over to the next epoch's fund.
 
 ### 8.5 Relayer admission
 
@@ -845,9 +933,13 @@ contracts treat as a duplicate.
    - total counted ≥ 1,000,000 CS; at least 2 distinct donors; no donor above 70 % of the total;
    - warning only (not blocking): donors linked to each other or to the owner by direct
      transfers in the last 6 months.
-4. 7-day wait. Incumbents cannot object (decision D3); an applicant is `Rejected` only when `T`
-   relayers attest it ineligible, and its bond is then withdrawable after 7 days (L2).
-5. `activate`. The relayers sign the new `SignerSet`; anyone submits it to the vault.
+4. 7-day wait (not in `Bootstrap`, [§5.14](#514-bootstrap)). Incumbents cannot object (D3). An
+   applicant is accepted at `T` eligibility attestations and `Rejected` only when more than half
+   of active relayers attest it ineligible (N5); a rejected bond is withdrawable after 7 days
+   (L2). An applicant nobody attests is not stuck: `cancelApplication()` returns its bond 7 days
+   after applying; missing attestations lower the incumbents' participation.
+5. `activate`, refused while the applicant would break the cap bound (I18, N1). The relayers
+   sign the new `SignerSet`; anyone submits it to the vault.
 
 ### 8.6 Inactivity, delegation drop, divergence
 
@@ -855,6 +947,10 @@ contracts treat as a duplicate.
 - Eligibility attested false for 30 consecutive days → `Inactive`. Back above → `Active` again
   with the same bond.
 - Divergence and orphan rule of [§7.7](#77-code-verification).
+- A founder whose `bscBond` attestation stays below 50 USDT 30 days after `Normal` → `Inactive`
+  (N8).
+- On every status change the cap bound of [§3.3](#33-what-is-not-protected) is re-checked
+  lazily; if it fails, the contract creates a "lower cap" proposal (N1).
 - `Inactive` relayers are out of `N` and `T`; they leave the vault signer set at the next
   `SignerSet` (7 days after the change for divergence); they may `leave()` and recover the bond
   under the rules of `withdrawBond`, or return to `Active` when the condition clears.
@@ -871,6 +967,10 @@ contracts treat as a duplicate.
 - Immediate when it only lowers risk: lowering the vault cap, the daily cap or the conservative
   price, retiring a version (with its 14-day grace), a permanent block. These execute as soon as
   `passedAt` is set.
+- Proposals created by the contract itself: "lower cap" to the bound when the lazy bound check
+  fails (N1); "pay prover" 30 days after a slash without appeal (N10). They still need the votes.
+- Two-thirds proposals (slash reserve, D4): pass when `yes ≥ ceil(2N/3)` of active relayers, `N`
+  taken at execution (N = 2 → 2, 3 → 2, 4 → 3, 5 → 4, 7 → 5); same windows otherwise.
 - Hard caps are checked at proposal and at execution.
 - Changes needing the vault (cap, block, migration) are then signed by `T` relayers.
 - Conflict resolution (a deposit id whose mint is in `mint-mismatch`): the proposal must carry the
@@ -907,13 +1007,24 @@ the signing depth):
    proposal kinds are: return the bond to the slashed relayer (appeal accepted; it may then
    apply again as a new relayer); reimburse users pro rata after a shortfall; pay the prover's
    share.
-3. Without an appeal, the prover's 10 % may be paid after the 30 days by the same two-thirds
-   vote; until a vote passes, everything stays in the reserve.
+3. Without an appeal, the contract creates a "pay prover" proposal 30 days after the slash; the
+   prover's 10 % is paid when it passes by the same two-thirds vote (N10). Until a vote passes,
+   everything stays in the reserve.
+4. **How the reserve is paid out (N4).** CS: the executed proposal credits `csClaimable` of the
+   payees in its list (≤ 100 per proposal, taken from a `reservePayees` attestation by `T`; more
+   payees need several proposals). USDT on the vault: after the Credits proposal executed, the
+   relayers sign `ReserveUse` messages and anyone submits `useReserve` with `unpauseThreshold()`
+   signatures; the vault pays from `reserveOf[nodeWallet]` only.
+5. **"Pro rata" for a reimbursement** means pro rata to the unpaid withdrawals at the time of
+   the shortfall: withdrawals recorded on Credits and not claimed on the vault, which are bounded
+   and cannot be inflated by moving cUSDT between wallets.
+6. A `Slashed` record stays until 30 days after the slash and until no reserve proposal
+   concerning it is open; it is then compacted into `signerHistory` (N10).
 
 An honest relayer whose signed record was removed by a reorganisation deeper than
 `creditsConfirmations` defends with the published file and block; such an event pauses the
-bridge through the watchdogs. Other signed messages (`SignerSet`, `Cap`, `BondRelease`) are not
-provable this way in version 1.
+bridge through the watchdogs. Other signed messages (`SignerSet`, `Cap`, `BondRelease`,
+`ReserveUse`) are not provable this way in version 1.
 
 ### 8.9 Pause and unpause
 
@@ -923,13 +1034,20 @@ withdrawals, so a false alarm never locks users out.
 - Any relayer pauses Credits (`pause`) and BSC (`Pause` signature with a deadline of at most 1
   hour, or `pauseDirect`). While paused, the methods of [§5.12](#512-methods-by-contract-state)
   apply. Small withdrawals continue: on Credits `burnForBsc` stays open for a net amount below
-  `delayThreshold` (1,000 USDT), and relayers keep signing those withdrawals; on BSC `claim`
-  stays open for `kind 0` claims with `amount < delayThreshold`, within the rolling daily cap and
-  without the queue. Deposits, mints, larger burns and claims, queued claims and `kind 1`
-  (migration) claims stop.
-- Cost of this choice: during a pause a colluding threshold can still be paid small false claims
-  up to the daily cap (2,000 USDT per 24 h by default) until the unpause decision or the proofs
-  act; the daily cap is the bound.
+  `delayThreshold` (1,000 USDT); relayers sign those withdrawals only while their own watchdog
+  passes (N9); on BSC a claim is paid only under the exact paused rule of
+  [§6.3](#63-methods) `claim`: `kind 0`, below `delayThreshold`, the normal 24-hour undelayed test
+  and the rolling daily cap, otherwise it reverts without being queued or marked `claimed` (N2).
+  Deposits, mints, larger burns and claims, queued claims and `kind 1` (migration) claims stop.
+- The automatic `mint-mismatch` pause ([§5.7](#57-mint-approval-counting)) is a full pause on
+  Credits: small burns stop too and relayers sign nothing.
+- Cost of this choice: a pause does not stop a colluding threshold; it is paid small false claims
+  at the normal rate (1,000 USDT per 24 h without a whitelist majority, the daily cap with one)
+  until the unpause decision or the proofs act. Any member of such a coalition may also start the
+  pause itself. The bounds are the daily cap and the vault cap. A stronger "second pauser makes
+  it full" rule is open decision D9. In exchange, an honest pause never locks users out: in a
+  stand-off (honest pauser, coalition below `U`) every user can still withdraw in pieces below
+  1,000 USDT.
 - A relayer that paused cannot pause again for 7 days on either chain; its own bond lock is
   extended by the length of every pause it started (C1).
 - Unpause needs `U = max(T, ceil(2N/3))` approvals on Credits and `unpauseThreshold()`
@@ -945,8 +1063,10 @@ withdrawals, so a false alarm never locks users out.
 3. `T` relayers attest `blockedDepositId` ([§5.8](#58-attestations)); only then
    `blockDepositLimit = blockedDepositId` on Credits, so every deposit accepted by the vault
    before its block is minted (H6, I13).
-4. `burnForBsc` stays open; asks and bids are refunded on cancel; epochs close with what is in
-   the fund.
+4. `burnForBsc` stays open; asks and bids are refunded on cancel. The buyback stops at the
+   block. The next `closeEpoch()` allocates the CS already bought and, once, the remaining
+   `buybackFund` in cUSDT, with the same split, credited to the owners' and payees' balances, so
+   that no stranded cUSDT keeps `totalSupply` above the 1 % end-of-life threshold.
 5. End of life (H7): relayers stay bound for at least 12 months after the block, and bonds stay
    locked until the later of 12 months and the time `totalSupply + unpaid withdrawals` falls
    below 1 % of its value at the block, at most 24 months. After that, `withdrawBond` opens and
@@ -967,7 +1087,7 @@ withdrawals, so a false alarm never locks users out.
 | Fewer than 3 signers on the vault | The vault refuses new deposits (L5); claims continue |
 | One relayer malicious | Cannot reach `T`; false claim signature → slashed by proof in any state; wrong mint approval → orphan mark, mint unaffected (H1) |
 | One relayer pausing repeatedly | Once per 7 days; an unfounded pause makes it `Inactive` |
-| Threshold malicious | [§3.3](#33-what-is-not-protected) |
+| Threshold malicious | Paid false claims at the normal rate (1,000 USDT per 24 h without a whitelist majority, the daily cap with one) up to the vault cap; a pause does not stop small claims (D2); proofs slash the signers; [§3.3](#33-what-is-not-protected) |
 | Relayer restart | Cursors and "submitted first" records; duplicates are ignored |
 | Lost BSC event (RPC gap) | Ids must be contiguous; a gap stops the loop until both sources agree |
 | Duplicate event | Approval of an id already minted returns `done` |
@@ -979,9 +1099,15 @@ withdrawals, so a false alarm never locks users out.
 | Credits resync (contract re-execution) | All contract logic depends only on its state, arguments and block time; it never uses `getBalance` |
 | Pause and resume | [§8.9](#89-pause-and-unpause); queued claims keep their unlock time and wait for unpause |
 | Relayer exits | New signer set; the bond is released only after the vault applied it and 30 more days passed |
-| Bond slashed | Out of the set; vault bond slashed by `T` signatures |
+| Bond slashed | Out of the set at once; CS to the slash reserve, vault bond to `reserveOf` by `T` signatures; 30-day appeal; any use of the reserve by a two-thirds vote ([§8.8](#88-slashing-by-proof)) |
+| Slashed relayer appeals | Removal stays in force; a two-thirds vote may return the bond (CS on Credits, USDT by `useReserve`) |
 | Two data hashes each reaching `T` for one deposit | Automatic pause `mint-mismatch`; resolution by vote with attested data |
-| Price manipulation | Free market by decision for user orders; automated purchases per [§14](#14-open-decisions) D1; entry bonds use `min(conservative, VWAP)` so wash trades make entry dearer |
+| Price manipulation | Free market (D1); the buyback runs in lazy hourly slices ([§8.4](#84-fees-buyback-and-rewards)); conversion at mint ≤ `conversionMax` per deposit, with the page's default `maxCsPrice`; entry bonds use `min(conservative, VWAP)` so wash trades make entry dearer |
+| Applicant never attested | `cancelApplication()` 7 days after applying; missing attestations lower the incumbents' participation (N5) |
+| Applicant would break the cap bound | `activate` refused (I18); it adds CS or waits for a lower cap |
+| Bootstrap taken over by strangers | Possible before the link (N6); the address is published only after the link with the founders' wallets; redeploy if needed |
+| Vault never linked after `activateBootstrap` | Founders `leave()` and withdraw 7 days later; below 3 founders back to `Bootstrap` (N7) |
+| Founder without the 50 USDT bond | Vault deposits refused while a founder signer lacks it; `Inactive` after 30 days and removed from the vault set (N8) |
 | Exchange addresses | Returns cannot carry a memo; UI warning; owners can change their return address |
 | Return address is a contract | `deliverCs` fails; the CS stay claimable; the owner sets another address |
 | Daily cap reached | Claims are queued in order, not reverted (M4) |
@@ -999,7 +1125,7 @@ withdrawals, so a false alarm never locks users out.
    (assuming fewer than `T` dishonest signers).
 4. `CS balance of CusdtBridge ≥ csLiabilities` (asks escrow + bonds + claimables + slash reserve +
    dust).
-5. `Σ balances + Σ bid escrow + buybackFund = totalSupply`.
+5. `Σ balances + Σ bid escrow + buybackFund = totalSupply` (`epochFund` is part of `buybackFund`).
 6. `USDT balance of vault ≥ userUsdt + Σ bondUsdt + reserveUsdt`.
 7. User USDT leaves the vault only through `claim`/`executeQueued`.
 8. `T ≥ 2` on both chains; every governable parameter is within its hard cap.
@@ -1015,6 +1141,10 @@ withdrawals, so a false alarm never locks users out.
 16. Every collection in the contract state has a bound in code; the serialised state stays below
     1 MB (C3).
 17. `dailyCap ≤ cap / 5`; increases of `cap` and `dailyCap` take 7 days.
+18. At every activation of a relayer after the founder phase, `Σ bondCs of the smallest set of
+    active relayers able to reach T × conservativePrice ≥ vault cap` (N1).
+19. Slash reserve funds leave only through an executed two-thirds proposal (Credits) and
+    `useReserve` with `unpauseThreshold()` signatures (vault) (D4, N4).
 
 ---
 
@@ -1032,8 +1162,11 @@ withdrawals, so a false alarm never locks users out.
 | Founders' bond | 100,000 CS + 50 USDT | code | fixed |
 | New entrant bond | max(1,000 USDT, 10 % of user USDT) | vote (rate) | rate ≤ 50 %, floor 1,000 USDT |
 | Entry price of CS | `min(conservativePrice, 7-day VWAP)` | code | — |
-| Admission wait | 7 days, no objection (D3) | code | — |
-| Founder phase end (Credits) | first buy ≥ 100 cUSDT between distinct wallets, 6 months, or 7 relayers | code | — |
+| Admission wait | 7 days, no objection (D3); none in `Bootstrap` | code | — |
+| Applicant rejection | more than half of active relayers attest ineligible (acceptance at `T`) | code | — |
+| Cancel an application | 7 days after applying | code | — |
+| Bootstrap | ≥ 3 founders; eligible when attested by more than half of the other applicants; link by more than half of active founders | code | — |
+| Founder phase end (Credits) | first buy ≥ 100 cUSDT between distinct wallets, 6 months after `Normal`, or 7 relayers | code | — |
 | Founder cap rule (vault) | `cap ≤ 20,000 USDT` while `foundersInSet() ≥ threshold()` | code | — |
 | Whitelist fallback | 30 days below 2 founders in the set | code | — |
 | Vault cap | 10,000 USDT | vote + `T` | ≤ 20,000 while founders reach `T`; after, ≤ Σ `bondCs` of the smallest `T`-set × conservative price; increases ×2 max per 7 days |
@@ -1053,7 +1186,7 @@ withdrawals, so a false alarm never locks users out.
 | Inactivity | < 50 % in 14 days | code | — |
 | Delegation-drop grace | 30 days | code | — |
 | Bond lock after exit | 30 days after the vault removed the key, plus pauses started | code | — |
-| Pause limits | once per 7 days per relayer; deadline ≤ 1 h on `Pause` messages | code | — |
+| Pause limits | once per 7 days per relayer; deadline ≤ 1 h on `Pause` messages; withdrawals below `delayThreshold` continue under the undelayed test and the daily cap (D2); `mint-mismatch` is a full pause on Credits | code | — |
 | Credits signing depth | 30 blocks (TO VERIFY) | vote | ≥ 10 |
 | Withdrawal records kept in full | 1,024 to 2,048 | code | — |
 | Pending mint window / expiry | 256 ids above the attested deposit id / 30 days | code | — |
@@ -1061,7 +1194,10 @@ withdrawals, so a false alarm never locks users out.
 | Migration fallback | 30 days | code | — |
 | Governance window / delay / execution | 14 days / 7 days / 21 days | code | — |
 | Version grace after retirement | 14 days | code | — |
-| Prover share | 10 % of slashed CS | code | — |
+| Prover share | 10 % of slashed CS, paid by a two-thirds vote | code | — |
+| Appeal window | 30 days after the slash | code | — |
+| Slash reserve use | `yes ≥ ceil(2N/3)` of active relayers; vault `useReserve` with `unpauseThreshold()` signatures | code | — |
+| Buyback slots | 1 hour; 168 slices per 7-day epoch; ≤ 25 fills per slot | code | — |
 
 ---
 
@@ -1081,7 +1217,17 @@ official 1518), every answer compared between the two (the comparison already ru
 - order book: fills, rounding, fees, limits per call and per wallet, founder-phase closing rule;
 - payable grammar and invalid user data;
 - epochs and reward allocation, resumable;
-- governance timing, hard caps, state matrix of [§5.12](#512-methods-by-contract-state);
+- governance timing, hard caps, state matrix of [§5.12](#512-methods-by-contract-state) including
+  the bootstrap states;
+- bootstrap: mutual eligibility with 3, 4 and 5 applicants, a Sybil majority of applicants,
+  `activateBootstrap` only by an applicant, `cancelApplication`, the `AwaitingVault` exit, the
+  link attestation;
+- buyback slots: lazy execution at the first call of a slot, one slot per hour, 25-fill bound,
+  epoch roll when `closeEpoch` is late, the stop at a permanent block;
+- admission: activation refused when the cap bound would break (I18), rejection by a majority,
+  divergence marks on eligibility attestations;
+- appeal, two-thirds reserve proposals with payee lists, the automatic "pay prover" and "lower
+  cap" proposals;
 - **performance at the bounds**: maximum state (64 relayers, 2,000 orders, 2,048 withdrawal
   records, roots for 1,000,000 withdrawals, holders), serialise + execute + deserialise time per
   call on both executors; the design is frozen only if every call stays under 1 s.
@@ -1101,6 +1247,9 @@ probe today), mixed executors (`EXECUTOR_JAR_ALT`):
 - vault deployment with test USDT; deposits, claims, queue in order, rolling caps, delay window,
   pause limits, block, migration with fallback, signer set updates, founder removal, whitelist
   fallback, bond release rules;
+- paused-mode claims: a small claim within the undelayed window is paid, a small claim beyond
+  it reverts without being queued or marked, a large claim reverts; the founder-bond condition on
+  deposits; `useReserve` paying only from the slashed relayer's reserve;
 - Foundry unit and invariant tests (I1 via a model of Credits, I6, I7, I14, I17), fuzzing of
   signature sets, EIP-712 test vectors shared with the Java implementation.
 
@@ -1114,7 +1263,9 @@ local BSC fork), with faults:
 | `T − 1` relayers offline | Nothing minted or paid; resumes on return |
 | One relayer approves wrong data | Orphan mark; the deposit is minted with the correct data |
 | One relayer signs a false claim | Proof slashes it, also while paused; claim impossible without `T` |
-| `T` relayers sign false claims | Paid up to the rolling caps and delay; watchdogs of the others pause; proofs slash; bonds of the signers cannot be withdrawn while they remain on the vault |
+| `T` relayers sign false claims | Paid at the normal rate (1,000 USDT per 24 h without a whitelist majority) up to the vault cap; a pause stops larger claims but not small ones; proofs slash; bonds of the signers cannot be withdrawn while they remain on the vault |
+| Pause by a coalition member | Small false claims continue at the normal rate, no faster |
+| Bootstrap with a Sybil majority of applicants | Strangers can activate; the project redeploys; nothing was deposited |
 | A colluder pauses then leaves | `leave` and `withdrawBond` refused while paused; proofs still accepted |
 | RPC source returns a gap or a forked log | Loop stops; no approval |
 | Relayer killed between store and send | No double or different action |
@@ -1197,6 +1348,9 @@ These need a decision by the project owner. Until then the text follows the curr
 | D5 | Provisional values | **Confirmed 2026-11-06.** As in the text | — | Bids in the book (yes); taker pays 0.1 % also on the conversion at mint, not on the buyback; owner share 20 % and the 100 largest delegators; participation 80 %; new-entrant bond: CS plus USDT on the vault (at least 50), no cUSDT (D6); initial vault cap 10,000 (hard 20,000 while founders reach `T`); daily cap 2,000 rolling (≤ cap / 5, was 5,000 per UTC day); minimum 5 USDT; prover share 10 % |
 | D6 | Bond assets (C2) | **Decided 2026-11-06.** CS on Credits plus USDT on the vault (at least 50) for the required value; no cUSDT; only CS counts for the cap bound | — | — |
 | D7 | Who deploys the contracts, and the initial founders | **Decided 2026-11-06.** One person deploys, with no privileges; the bridge activates only with at least 3 eligible founders, who attest each other ([§5.14](#514-bootstrap)) | — | — |
+| D8 | Minimum CS share in a new entrant's bond (N1) | Any proportion of CS and USDT; activation refused when the cap bound would break (I18) | An entrant with a mostly-USDT bond adds little to the bound against a colluding threshold; the activation check already protects the cap, but it may refuse entrants unexpectedly | (a) keep any proportion with the activation check; (b) require `bondCs × entryPrice ≥ 50 %` of the requirement |
+| D9 | Escalation of a pause (N2) | A pause by one relayer keeps small withdrawals open (D2) | A coalition member can start the pause itself; small false claims continue at the normal rate | (a) keep D2 as is; (b) a second, distinct relayer pausing while a pause is open makes it a full pause (small claims stop), both pausers bearing the pause limits |
+| D10 | Bootstrap protection (N6) | No deployer privilege (D7); operational defence: publish the address only after the link, with the founders' wallets | Several strangers with real delegations can activate first; the project would redeploy | (a) keep the operational defence; (b) `activateBootstrap` not before deploy + 48 hours, so the intended founders can apply first; (c) a hash of the intended founders' node wallets in the deploy transaction's user data, checked at activation (reintroduces a deployer choice, without keys, fees or votes) |
 
 ---
 
@@ -1241,7 +1395,7 @@ hand-built transactions. To be designed after the spec is approved:
 | M9 `depositFromMigration` | §6.3 |
 | M10 founder arithmetic | §3.3(2), §11 |
 | L1 `double` | §4.2, §5.6 |
-| L2 rejected applicant | §8.5 step 4 |
+| L2 rejected applicant | §5.4 `withdrawBond`, §8.5 step 4 |
 | L3 minimum withdrawal | §11 |
 | L4 rolling window | §6.1 |
 | L5 three relayers | §6.3 `deposit` |
@@ -1249,4 +1403,22 @@ hand-built transactions. To be designed after the spec is approved:
 | L7 urgent versions | §7.7 |
 | L8 staking off | §13.1 (on on mainnet) |
 | L9 50 USDT release | §6.3 `releaseBond` |
-| Underspecified 1–15 | §6.2 (1), §5.8 (2, 7), §5.1/§5.2 (3), §5.12 (4), §5.7 (5), §8.4 (6), §5.9/§5.1 (8), §11 (9), §5.4/§8.8 (10), §5.5 (11), §7.3/§7.4 (12), §6.3 (13), §5.6 (14), §5.14 (15) |
+| Underspecified 1–15 | §6.2 (1), §5.8 (2, 7), §5.1/§5.2 (3), §5.12 (4), §5.7 (5), §8.4 (6), §5.9/§5.1 (8), §11 (9), §5.4/§8.8/§6.3 `useReserve` (10), §5.5 (11), §7.3/§7.4 (12), §6.3 (13), §5.6 (14), §5.14 (15) |
+
+Re-review of the owner's decisions (`docs/reviews/2026-11-06-decisions-re-review.md`):
+
+| Finding | Where |
+|---|---|
+| N1 cap bound and USDT-bonded entrants | §3.3, §5.4 `activate`, §5.10, §8.5, §8.6, §8.7, I18, D8 |
+| N2 paused-mode claims | §3.3(1), §5.7 step 5, §6.3 `claim`, §8.9, §9, §12.3, §12.4, D9 |
+| N3 buyback sweep and tick | §3.3 item 8, §5.1, §5.4 `buybackTick`, §7.6, §8.4 |
+| N4 reserve exit and reimbursement | §5.8 `reservePayees`, §6.1, §6.2 `ReserveUse`, §6.3 `useReserve`, §8.8, I19 |
+| N5 abstention, stuck applicants, rejection | §5.4 `cancelApplication`, §5.8, §7.7, §8.4, §8.5 |
+| N6 bootstrap hijack | §5.4 `activateBootstrap`, §5.14 step 8, §9, D10 |
+| N7 `AwaitingVault` dead end | §5.4 `leave`/`withdrawBond`, §5.12, §5.14 step 6 |
+| N8 founder without USDT bond | §5.14 steps 4 and 7, §6 constructor, §6.1, §6.3 `deposit`, §8.6 |
+| N9 signing while paused | §7.4(3), §8.9 |
+| N10 two thirds, `Slashed` records, prover | §5.1, §5.3, §8.7, §8.8 |
+| N11 conversion default | §8.1 |
+| N12 bootstrap arithmetic, founder clock | §5.8 `link`, §5.9, §5.14 steps 2 and 5 |
+| Inconsistencies 1–19 | §5.1 `link`/`state` (1), §5.8 (2), §5.4/§5.12 (3), §5.4/§5.10 (4), §5.4 `withdrawBond` (5), §6/§6.3 (6), §5.12/§8.10 (7), §3.3/§9/§12.4 (8), §3.1 (9), §7.4 (10), §11 (11), §9 (12), §8.4 (13), §5.1/I5 (14), §5.3 (15), §5.4/§5.12 (16), §12 (17), this table (18), §2.1/§11 (19) |

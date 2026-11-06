@@ -86,7 +86,7 @@ threshold of relayers unable to steal (see [§3](#3-trust-model)).
 | Slashing | Automatic, by proof of a false withdrawal signature, verified in the Credits contract, callable in every state |
 | Fees | Bridge fee 0.05 cUSDT each way; swap fee 0.1 % paid by the taker; both fund a CS buyback for relayers and their delegators |
 | CS for new users | 2 % of each deposit (min 1, max 20 cUSDT) bought as CS from the lowest asks at mint |
-| Prices | Free market: no price limit imposed by the contract on user orders; the depositor MAY set a maximum CS price for their own conversion (automated purchases: [§14](#14-open-decisions) D1) |
+| Prices | Free market: no price limit imposed by the contract, also on automated purchases; the depositor MAY set a maximum CS price for their own conversion; the buyback is spread in hourly slices over the epoch ([§8.4](#84-fees-buyback-and-rewards)) |
 | Large claims | Above 1,000 USDT per rolling 24 h (cumulative, not per claim), 24-hour delay unless the signatures include a majority of the whitelist |
 | Exit | Permanent block → withdraw-only on both chains; each user withdraws, or migrates their own funds to new contracts registered by vote, with a fallback to their own BSC address |
 
@@ -279,6 +279,7 @@ compaction), bounded in work per call ([§5.11](#511-bounded-state-and-work)).
 | `asks`, `bids: TreeMap<PriceKey, Order>` | Order book, price then id | ≤ 2,000 open orders in total, ≤ 20 per wallet, minimum size 10 CS and 0.10 cUSDT (C3) |
 | `lastPrice`, `dailyStats[8]` | Last fill price; per-day CS and cUSDT volumes for the 7-day VWAP | fixed |
 | `buybackFund: BigDecimal` | cUSDT from fees, not yet spent | — |
+| `epochFund`, `sliceBudget`, `lastTickSlot` | Fund fixed at the epoch start, its 1/168 hourly slice, last hour slot spent | fixed |
 | `csClaimable: Map<String, BigDecimal>` | CS owed to wallets (conversions, rewards, refunds) | one per wallet; claims below 0.001 CS stay in dust |
 | `returnAddress: Map<String, String>` | Wallet → its return address for CS | one per wallet that set one |
 | `csLiabilities` | Sum of all CS the contract owes | — |
@@ -391,7 +392,8 @@ relayer concerned, **A** anyone. All amounts are `BigDecimal` (Variant `v_big_de
 
 | Method | Caller | Rules |
 |---|---|---|
-| `closeEpoch()` | A | After the epoch end; resumable ([§8.4](#84-fees-buyback-and-rewards)) |
+| `buybackTick()` | A | At most once per hour slot; spends at most the slot budget ([§8.4](#84-fees-buyback-and-rewards)) |
+| `closeEpoch()` | A | After the epoch end; allocates the CS bought in the epoch; resumable ([§8.4](#84-fees-buyback-and-rewards)) |
 | `propose(kind, key, value)` | R | Kinds: parameter, admit/retire version, conservative CS price, vault cap, permanent block, migration target, conflict resolution. Rejected if outside the hard caps |
 | `vote(proposalId, yes)` | R | One vote per active relayer; changeable until the voting end |
 | `execute(proposalId)` | A | [§8.7](#87-governance) timing; pass condition re-checked at execution |
@@ -461,8 +463,8 @@ For deposit `(id, to, A, maxCsPrice)`:
 2. `budget = min(conversionRate × net, conversionMax)`; if `budget < conversionMin` and
    `net ≥ 10 × conversionMin`, `budget = conversionMin`; for smaller deposits the budget is the
    rate alone (M3).
-3. Take asks from the lowest price, oldest first, not above `maxCsPrice` if set (and the
-   automated-purchase rule of [§14](#14-open-decisions) D1, if adopted), spending at most `budget`
+3. Take asks from the lowest price, oldest first, not above `maxCsPrice` if set (no other price
+   limit, decision D1), spending at most `budget`
    including the swap fee, at most 50 fills.
 4. Mint `A`: `fee` and the swap fee to `buybackFund`, the cUSDT paid to the sellers' balances,
    the rest to `to`; CS bought to `csClaimable[to]`.
@@ -542,7 +544,8 @@ A later rise of the requirement never applies to existing relayers. For the cap 
 | `proveFalseSignature` | yes | yes | yes | yes |
 | `attest`, `submitDigest`, `updateStatus` | yes | yes | yes | yes |
 | `propose`, `vote`, `execute` | yes | yes (only risk-lowering kinds execute) | yes | yes |
-| `closeEpoch` | yes | no buyback; allocation of what was bought | yes | yes |
+| `buybackTick` | yes | no | yes | yes |
+| `closeEpoch` | yes | allocation of what was bought | yes | yes |
 | `pause`, `approveUnpause` | yes | yes | yes | yes |
 
 ### 5.13 Errors
@@ -725,6 +728,9 @@ timestamp ≤ period start, invariantOk)` and publishes the clear values. The co
 most common digest; a relayer whose digest differs from one that has at least `T` submitters
 gets a divergence mark.
 
+In the same loop each relayer calls `buybackTick()` once per hour slot if no one has yet (a
+second call in the slot is refused cheaply), and `closeEpoch()` after the epoch end.
+
 ### 7.7 Code verification
 
 1. **Admitted versions.** The relayer is published as source with reproducible builds; the hash
@@ -786,17 +792,23 @@ contracts treat as a duplicate.
 ### 8.4 Fees, buyback and rewards
 
 1. Bridge fees and swap fees accumulate in `buybackFund` (cUSDT).
-2. At `closeEpoch()` (every 7 days) the contract buys CS from the lowest asks with the fund, at
-   most 50 fills per call, resumable, under the rule of [§14](#14-open-decisions) D1 (current
-   text: no price limit), then splits the CS bought equally among relayers active for the whole
-   epoch with ≥ 80 % participation.
+2. The buyback is spread over the epoch (decision D1: no price limit, small slices). At the start
+   of an epoch (7 days = 168 hour slots) the contract fixes `epochFund = buybackFund` and
+   `sliceBudget = epochFund / 168`; fees arriving during the epoch wait for the next one.
+   `buybackTick()`, callable by anyone at most once per hour slot (by block time), buys CS from
+   the lowest asks, oldest first, for at most `sliceBudget` (no fee on the buyback), at most 50
+   fills; an unspent slice (no asks, or fewer asks) stays in `buybackFund`. Relayers call it as
+   part of their loop ([§7](#7-relayer-process)). One manipulated slot can capture at most 1/168
+   of the epoch's fund, and other sellers have an hour to place lower asks.
+3. At `closeEpoch()` (every 7 days) the contract splits the CS bought during the epoch equally
+   among relayers active for the whole epoch with ≥ 80 % participation.
 3. Participation (underspecified 6) = approvals of the epoch's minted deposits within 10 minutes
    of the mint, plus digests submitted, over the number of both; an epoch without deposits
    counts digests only.
 4. Each relayer's share: `ownerShare` (20 %) to its owner wallet, the rest to the payees attested
    for that epoch ([§5.8](#58-attestations)) pro rata; the remainder to the owner. Credited to
    `csClaimable`.
-5. If no asks exist, the fund carries over.
+5. Whatever the slices did not spend carries over to the next epoch's fund.
 
 ### 8.5 Relayer admission
 
@@ -1133,7 +1145,7 @@ These need a decision by the project owner. Until then the text follows the curr
 
 | # | Topic | Current decision | Review concern | Options |
 |---|---|---|---|---|
-| D1 | Price limits on automated purchases (H8, M3) | No contract-imposed price limit (free market); the depositor may set `maxCsPrice` for their own conversion | The buyback spends the whole fee fund at any price: one ask at an extreme price in a thin book captures it. The default conversion at mint can be overpaid the same way | (a) keep no limit; (b) limit only automated purchases (buyback, default conversion) to `lastPrice` or 7-day VWAP × k, user-initiated buys stay free; (c) pay rewards in cUSDT directly until the book is liquid; (d) spread the buyback over the epoch with a per-call amount |
+| D1 | Price limits on automated purchases (H8, M3) | **Decided 2026-11-06.** No price limit anywhere: the conversion at mint is small (≤ `conversionMax`) and a free market rewards whoever sells CS; the buyback is spread in hourly slices of 1/168 of the epoch fund (option d) | — | — |
 | D2 | Single-relayer pause (H2, former §14.3) | Any relayer pauses both chains immediately; claims stop too | One relayer can freeze all funds repeatedly | Whether claims below the delay threshold continue during a single-relayer pause; one pause per relayer per 7 days (in the text); consequences of an unfounded pause (in the text: `Inactive` 30 days) |
 | D3 | Objection during the 7-day wait (M6) | One third of active relayers can reject an applicant | Incumbents can veto every applicant and keep `N` small; contrary to automatic admission | Remove it; let it only trigger a re-attestation of eligibility; require a majority with a public record |
 | D4 | Use of the slash reserve | Not decided | — | Proposal: reimburse users pro rata after a shortfall, by vote |
@@ -1157,10 +1169,10 @@ These need a decision by the project owner. Until then the text follows the curr
 | H5 entry price | §5.10 |
 | H6 deposits around the block | §5.1, §8.10, I13 |
 | H7 migration and end of life | §5.4 `migrate`, §6.2 `Claim.fallback`, §6.3, §8.10 |
-| H8 buyback | D1 |
+| H8 buyback | §8.4 (hourly slices, D1 decided) |
 | M1 rotated keys | §4.1, §5.1 `signerHistory`, §5.4, §8.8 |
 | M2 Credits reorganisations | §3.3(7), §7.4, §8.8, §11 |
-| M3 conversion in a thin book | §5.7.1 step 2, D1 |
+| M3 conversion in a thin book | §5.7.1 step 2; no price limit by decision D1 (at most `conversionMax` per deposit) |
 | M4 daily cap griefing | §6.3 `claim` queue |
 | M5 governance timing | §8.7 |
 | M6 one-third veto | D3 |

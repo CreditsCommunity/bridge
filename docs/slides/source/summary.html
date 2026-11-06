@@ -1,0 +1,13 @@
+<section id="summary" data-transition="fade" style="background:#14213D;color:#F7F5EF;font-family:Inter, Arial, sans-serif;padding:128px;display:flex;flex-direction:column;gap:48px">
+<h2 style="font-family:'Space Grotesk', Arial, sans-serif;font-size:72px;font-weight:700;color:#F7F5EF">Who is protected by what</h2>
+<table style="font-family:Inter, Arial, sans-serif;font-size:30px;color:#F7F5EF">
+<tr><th style="width:38%;text-align:left">Risk</th><th style="width:62%;text-align:left">Protection</th></tr>
+<tr><td>One relayer offline or wrong</td><td>Threshold: the others still agree</td></tr>
+<tr><td>One relayer signs a false withdrawal</td><td>Not enough signatures; proof removes it and takes its bond</td></tr>
+<tr><td>A group of relayers colludes</td><td>Vault cap, 2,000 a day, 24-hour wait, pause by anyone honest</td></tr>
+<tr><td>A seller crashes the price</td><td>Daily band: at most −5 % a day</td></tr>
+<tr><td>The bridge must close</td><td>Withdrawals stay open; each user moves their own funds</td></tr>
+</table>
+<p style="font-size:30px;line-height:1.4;color:#C9D3E3">Full specification and reviews: github.com/CreditsCommunity/bridge, branch docs/spec</p>
+<aside>No design removes all trust: if enough relayers collude they can take up to the vault cap. Everything else in the design is about making that cap small, the theft slow and visible, and the cost high.</aside>
+</section>

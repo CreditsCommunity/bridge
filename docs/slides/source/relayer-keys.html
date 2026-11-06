@@ -1,0 +1,17 @@
+<section id="relayer-keys" data-transition="fade" style="background:#F7F5EF;color:#14213D;font-family:Inter, Arial, sans-serif;padding:128px;display:flex;flex-direction:column;gap:40px">
+<h2 style="font-family:'Space Grotesk', Arial, sans-serif;font-size:72px;font-weight:700">Two wallets, one on each chain</h2>
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:32px">
+<div style="display:flex;flex-direction:column;gap:18px;background:#FFFFFF;border:2px solid #3A6EA5;border-radius:16px;padding:40px">
+<p style="font-size:26px;color:#3A6EA5;font-weight:600;text-transform:uppercase;letter-spacing:2px">Credits · the node wallet</p>
+<p style="font-size:30px;line-height:1.4"><b>Holds:</b> the CS bond (100,000 for founders), a little CS for fees, the 1M CS of delegations it receives.</p>
+<p style="font-size:30px;line-height:1.4"><b>Pays rewards and the bond back</b> to a safe Credits address chosen with the BSC wallet.</p>
+</div>
+<div style="display:flex;flex-direction:column;gap:18px;background:#FFFFFF;border:2px solid #1F8A70;border-radius:16px;padding:40px">
+<p style="font-size:26px;color:#1F8A70;font-weight:600;text-transform:uppercase;letter-spacing:2px">BSC · the BSC wallet, kept offline</p>
+<p style="font-size:30px;line-height:1.4"><b>Holds:</b> a few cents of BNB and the USDT bond (50 for founders).</p>
+<p style="font-size:30px;line-height:1.4"><b>Signs:</b> the link to the node, the safe Credits address, and the decision to leave.</p>
+</div>
+</div>
+<p style="font-size:30px;line-height:1.4;color:#3D4A63">The software adds its own signing key, with no funds. Whoever breaks into the server cannot leave, cannot move the bond and cannot redirect the rewards.</p>
+<aside>The node wallet must be the one receiving the delegations, so the contract sees bond and delegations together; but it lives on the server. For that reason the destination of the bond and of the rewards, and the decision to leave, need a signature from the BSC wallet, which stays offline. A thief with the server keys can at most get the relayer slashed; a successful appeal returns the bond to the safe address. The BSC wallet must be a normal wallet, not a contract, and losing its key loses the USDT bond.</aside>
+</section>

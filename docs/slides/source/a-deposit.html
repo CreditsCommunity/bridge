@@ -1,0 +1,27 @@
+<section id="a-deposit" data-transition="fade" style="background:#F7F5EF;color:#14213D;font-family:Inter, Arial, sans-serif;padding:128px;display:flex;flex-direction:column;gap:40px">
+<h2 style="font-family:'Space Grotesk', Arial, sans-serif;font-size:72px;font-weight:700">Alice deposits 100 USDT</h2>
+<div style="display:flex;flex-direction:column;gap:20px">
+<div style="display:flex;flex-direction:row;align-items:center;gap:28px;background:#FFFFFF;border-radius:16px;padding:24px 32px">
+<p style="font-size:32px;font-weight:600;width:56px;color:#E07A1F">1</p>
+<p style="flex:1;font-size:30px;line-height:1.35">Bob sends 50,000 CS to the contract with the note “ask 0.020”: his CS wait in escrow.</p>
+<p style="font-size:26px;background:#E07A1F;color:#14213D;padding:8px 20px;border-radius:999px;white-space:nowrap">CS: Bob → escrow</p>
+</div>
+<div style="display:flex;flex-direction:row;align-items:center;gap:28px;background:#FFFFFF;border-radius:16px;padding:24px 32px">
+<p style="font-size:32px;font-weight:600;width:56px;color:#1F8A70">2</p>
+<p style="flex:1;font-size:30px;line-height:1.35">Alice deposits 100 USDT into the vault on BSC, plus the 0.0001 BNB gas fee that goes to the vault’s gas pool. It becomes deposit no. 0.</p>
+<p style="font-size:26px;background:#1F8A70;color:#F7F5EF;padding:8px 20px;border-radius:999px;white-space:nowrap">USDT + BNB → vault</p>
+</div>
+<div style="display:flex;flex-direction:row;align-items:center;gap:28px;background:#FFFFFF;border-radius:16px;padding:24px 32px">
+<p style="font-size:32px;font-weight:600;width:56px;color:#3A6EA5">3</p>
+<p style="flex:1;font-size:30px;line-height:1.35">R1 and R2 see it and approve on Credits. R3 is offline: 2 of 3 is enough, 100 csUSDT are created.</p>
+<p style="font-size:26px;background:#3A6EA5;color:#F7F5EF;padding:8px 20px;border-radius:999px;white-space:nowrap">csUSDT: minted 100</p>
+</div>
+<div style="display:flex;flex-direction:row;align-items:center;gap:28px;background:#FFFFFF;border-radius:16px;padding:24px 32px">
+<p style="font-size:32px;font-weight:600;width:56px;color:#3A6EA5">4</p>
+<p style="flex:1;font-size:30px;line-height:1.35">0.05 goes to the fee fund. 2 % (1.999) buys CS from Bob’s offer: Alice gets ≈ 99.85 CS to pay her fees and ≈ 97.95 csUSDT.</p>
+<p style="font-size:26px;background:#E07A1F;color:#14213D;padding:8px 20px;border-radius:999px;white-space:nowrap">CS: escrow → Alice</p>
+</div>
+</div>
+<p style="font-size:28px;color:#3D4A63">When R3 comes back and approves too, the answer is “done”: a deposit is never minted twice.</p>
+<aside>Alice needed only BNB: for the gas of her deposit and the tiny gas fee, a few cents in all. She had no CS before; the automatic conversion gave her enough for hundreds of Credits transactions. Bob, whose offer was the cheapest, received about 1.997 csUSDT.</aside>
+</section>

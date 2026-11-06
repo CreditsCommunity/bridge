@@ -1,0 +1,481 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>csUSDT bridge: how it works</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300..700&family=Inter:wght@400;600&display=swap">
+<style>
+body{margin:0;background:#0d1526;}
+.slide{width:1920px;height:1080px;position:relative;overflow:hidden;margin:0 auto 32px;zoom:var(--z,0.5);}
+.slide section{width:1920px;height:1080px;box-sizing:border-box;position:relative;}
+.slide h1,.slide h2,.slide h3,.slide p,.slide ul,.slide table{margin:0;}
+.slide table{border-collapse:collapse;width:100%;} .slide td,.slide th{padding:0.35em 0.6em;border-bottom:1px solid rgba(128,128,128,.35);}
+.slide aside{display:none;}
+x-connector{display:block;align-self:center;border-top:4px solid currentColor;}
+</style>
+<script>function fit(){document.documentElement.style.setProperty('--z',Math.min(1,(window.innerWidth-16)/1920));}addEventListener('resize',fit);addEventListener('DOMContentLoaded',fit);</script>
+</head><body>
+<div class="slide" id="s1"><section id="cover" data-transition="fade" style="background:#14213D;color:#F7F5EF;font-family:Inter, Arial, sans-serif;padding:128px;display:flex;flex-direction:column;justify-content:center;gap:40px">
+<p style="font-size:28px;color:#7FC8A9;letter-spacing:4px;text-transform:uppercase">Credits community · bridge design</p>
+<h1 style="font-family:'Space Grotesk', Arial, sans-serif;font-size:120px;font-weight:700;line-height:1.05;color:#F7F5EF">How the csUSDT bridge works</h1>
+<p style="font-size:44px;line-height:1.3;color:#C9D3E3;width:1400px">Follow USDT, csUSDT and CS from one wallet to another, with 3 and then 7 relayers</p>
+<div style="display:flex;flex-direction:row;gap:24px">
+<p style="font-size:28px;background:#1F8A70;color:#F7F5EF;padding:12px 28px;border-radius:999px">USDT on BSC</p>
+<p style="font-size:28px;background:#3A6EA5;color:#F7F5EF;padding:12px 28px;border-radius:999px">csUSDT on Credits</p>
+<p style="font-size:28px;background:#E07A1F;color:#14213D;padding:12px 28px;border-radius:999px">CS on Credits</p>
+</div>
+<p style="position:absolute;left:128px;bottom:64px;width:1600px;font-size:24px;color:#8C9BB5">Based on the specification, revision 3 (2026-11-06) · github.com/CreditsCommunity/bridge, branch docs/spec</p>
+<aside>This deck follows two simple stories. The first shows the normal cycle with three relayers. The second shows what happens when something goes wrong with seven relayers. The colors stay the same throughout: green for USDT on BSC, blue for csUSDT on Credits, orange for CS.</aside>
+</section></div>
+<div class="slide" id="s2"><section id="pieces" data-transition="fade" style="background:#F7F5EF;color:#14213D;font-family:Inter, Arial, sans-serif;padding:128px;display:flex;flex-direction:column;gap:56px">
+<h2 style="font-family:'Space Grotesk', Arial, sans-serif;font-size:72px;font-weight:700">Three pieces, no administrator</h2>
+<div style="display:flex;flex-direction:row;align-items:stretch;gap:0px">
+<div style="flex:1;display:flex;flex-direction:column;gap:16px;background:#FFFFFF;border:2px solid #1F8A70;border-radius:16px;padding:40px">
+<p style="font-size:24px;color:#1F8A70;font-weight:600;text-transform:uppercase;letter-spacing:2px">BSC</p>
+<h3 style="font-size:44px;font-weight:700">UsdtVault</h3>
+<p style="font-size:30px;line-height:1.4;color:#3D4A63">Holds the users’ USDT. Pays a withdrawal only with enough relayer signatures.</p>
+</div>
+<div style="display:flex;flex-direction:column;justify-content:center;padding:0px 16px">
+<x-connector head="both" style="width:96px;color:#14213D;border-width:4px"></x-connector>
+</div>
+<div style="flex:1;display:flex;flex-direction:column;gap:16px;background:#14213D;border-radius:16px;padding:40px">
+<p style="font-size:24px;color:#7FC8A9;font-weight:600;text-transform:uppercase;letter-spacing:2px">In between</p>
+<h3 style="font-size:44px;font-weight:700;color:#F7F5EF">Relayers</h3>
+<p style="font-size:30px;line-height:1.4;color:#C9D3E3">Credits full nodes run by different people. They read both chains and agree on what happened.</p>
+</div>
+<div style="display:flex;flex-direction:column;justify-content:center;padding:0px 16px">
+<x-connector head="both" style="width:96px;color:#14213D;border-width:4px"></x-connector>
+</div>
+<div style="flex:1;display:flex;flex-direction:column;gap:16px;background:#FFFFFF;border:2px solid #3A6EA5;border-radius:16px;padding:40px">
+<p style="font-size:24px;color:#3A6EA5;font-weight:600;text-transform:uppercase;letter-spacing:2px">Credits</p>
+<h3 style="font-size:44px;font-weight:700">CsUsdtBridge</h3>
+<p style="font-size:30px;line-height:1.4;color:#3D4A63">One contract: the csUSDT token, the CS order book, bonds, rewards and votes.</p>
+</div>
+</div>
+<p style="font-size:32px;line-height:1.4;color:#3D4A63">Nothing moves unless a <b>threshold</b> of relayers agrees: half of them plus one, at most 7. No single key can mint or pay.</p>
+<aside>The vault on BSC and the contract on Credits have no owner and cannot be upgraded. The relayers are the only link: each reads both chains on its own and the contracts count how many agree.</aside>
+</section></div>
+<div class="slide" id="s3"><section id="tokens" data-transition="fade" style="background:#F7F5EF;color:#14213D;font-family:Inter, Arial, sans-serif;padding:128px;display:flex;flex-direction:column;gap:56px">
+<h2 style="font-family:'Space Grotesk', Arial, sans-serif;font-size:72px;font-weight:700">Three kinds of money</h2>
+<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:32px">
+<div style="display:flex;flex-direction:column;gap:20px;background:#1F8A70;border-radius:16px;padding:44px">
+<h3 style="font-size:56px;font-weight:700;color:#F7F5EF">USDT</h3>
+<p style="font-size:30px;line-height:1.4;color:#EAF6F1">Tether’s dollar on BSC. It stays locked in the vault while it is on the Credits side.</p>
+</div>
+<div style="display:flex;flex-direction:column;gap:20px;background:#3A6EA5;border-radius:16px;padding:44px">
+<h3 style="font-size:56px;font-weight:700;color:#F7F5EF">csUSDT</h3>
+<p style="font-size:30px;line-height:1.4;color:#EAF0F8">“Credits Bridged USDT”. Created 1 for 1 when USDT enters the vault, destroyed when it leaves. Not issued by Tether.</p>
+</div>
+<div style="display:flex;flex-direction:column;gap:20px;background:#E07A1F;border-radius:16px;padding:44px">
+<h3 style="font-size:56px;font-weight:700;color:#14213D">CS</h3>
+<p style="font-size:30px;line-height:1.4;color:#14213D">The Credits coin. It pays every Credits transaction fee, and it is traded against csUSDT.</p>
+</div>
+</div>
+<p style="font-size:32px;line-height:1.4;color:#3D4A63">The rule that always holds: <b>csUSDT in circulation + unpaid withdrawals ≤ users’ USDT in the vault.</b></p>
+<aside>Every relayer checks that rule at every cycle. If it ever breaks, any relayer can stop the bridge.</aside>
+</section></div>
+<div class="slide" id="s4"><section id="relayer-who" data-transition="fade" style="background:#F7F5EF;color:#14213D;font-family:Inter, Arial, sans-serif;padding:128px;display:flex;flex-direction:column;gap:48px">
+<h2 style="font-family:'Space Grotesk', Arial, sans-serif;font-size:72px;font-weight:700">Who can be a relayer</h2>
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:32px">
+<div style="display:flex;flex-direction:column;gap:16px;background:#FFFFFF;border-radius:16px;padding:40px">
+<h3 style="font-size:40px;font-weight:700">A Credits full node</h3>
+<p style="font-size:30px;line-height:1.4;color:#3D4A63">Running the admitted relayer software, with its own Credits node and two independent BSC sources.</p>
+</div>
+<div style="display:flex;flex-direction:column;gap:16px;background:#FFFFFF;border-radius:16px;padding:40px">
+<h3 style="font-size:40px;font-weight:700">1M CS of delegations</h3>
+<p style="font-size:30px;line-height:1.4;color:#3D4A63">Delegated to the node wallet for one year, from at least 2 wallets that are not the owner’s; none above 70 %.</p>
+</div>
+<div style="display:flex;flex-direction:column;gap:16px;background:#FFFFFF;border-radius:16px;padding:40px">
+<h3 style="font-size:40px;font-weight:700">A bond</h3>
+<p style="font-size:30px;line-height:1.4;color:#3D4A63">CS locked in the Credits contract plus USDT in the vault. It is lost only if a false signature is proven.</p>
+</div>
+<div style="display:flex;flex-direction:column;gap:16px;background:#FFFFFF;border-radius:16px;padding:40px">
+<h3 style="font-size:40px;font-weight:700">No one’s permission</h3>
+<p style="font-size:30px;line-height:1.4;color:#3D4A63">The other relayers’ software checks the rules and confirms. Nobody votes on people.</p>
+</div>
+</div>
+<aside>The delegated CS stay with their owners and keep earning the normal one-year staking reward; the relayer earns an extra reward from the bridge fees, shared with those delegators. The delegations are read from the Credits node API by each relayer, because a contract cannot read them.</aside>
+</section></div>
+<div class="slide" id="s5"><section id="relayer-keys" data-transition="fade" style="background:#F7F5EF;color:#14213D;font-family:Inter, Arial, sans-serif;padding:128px;display:flex;flex-direction:column;gap:40px">
+<h2 style="font-family:'Space Grotesk', Arial, sans-serif;font-size:72px;font-weight:700">Two wallets, one on each chain</h2>
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:32px">
+<div style="display:flex;flex-direction:column;gap:18px;background:#FFFFFF;border:2px solid #3A6EA5;border-radius:16px;padding:40px">
+<p style="font-size:26px;color:#3A6EA5;font-weight:600;text-transform:uppercase;letter-spacing:2px">Credits · the node wallet</p>
+<p style="font-size:30px;line-height:1.4"><b>Holds:</b> the CS bond (100,000 for founders), a little CS for fees, the 1M CS of delegations it receives.</p>
+<p style="font-size:30px;line-height:1.4"><b>Pays rewards and the bond back</b> to a safe Credits address chosen with the BSC wallet.</p>
+</div>
+<div style="display:flex;flex-direction:column;gap:18px;background:#FFFFFF;border:2px solid #1F8A70;border-radius:16px;padding:40px">
+<p style="font-size:26px;color:#1F8A70;font-weight:600;text-transform:uppercase;letter-spacing:2px">BSC · the BSC wallet, kept offline</p>
+<p style="font-size:30px;line-height:1.4"><b>Holds:</b> a few cents of BNB and the USDT bond (50 for founders).</p>
+<p style="font-size:30px;line-height:1.4"><b>Signs:</b> the link to the node, the safe Credits address, and the decision to leave.</p>
+</div>
+</div>
+<p style="font-size:30px;line-height:1.4;color:#3D4A63">The software adds its own signing key, with no funds. Whoever breaks into the server cannot leave, cannot move the bond and cannot redirect the rewards.</p>
+<aside>The node wallet must be the one receiving the delegations, so the contract sees bond and delegations together; but it lives on the server. For that reason the destination of the bond and of the rewards, and the decision to leave, need a signature from the BSC wallet, which stays offline. A thief with the server keys can at most get the relayer slashed; a successful appeal returns the bond to the safe address. The BSC wallet must be a normal wallet, not a contract, and losing its key loses the USDT bond.</aside>
+</section></div>
+<div class="slide" id="s6"><section id="gas" data-transition="fade" style="background:#F7F5EF;color:#14213D;font-family:Inter, Arial, sans-serif;padding:128px;display:flex;flex-direction:column;gap:48px">
+<h2 style="font-family:'Space Grotesk', Arial, sans-serif;font-size:72px;font-weight:700">Who pays the BSC gas</h2>
+<div style="display:flex;flex-direction:row;align-items:center;gap:0px">
+<div style="flex:1;display:flex;flex-direction:column;gap:12px;background:#1F8A70;border-radius:16px;padding:32px">
+<h3 style="font-size:36px;font-weight:700;color:#F7F5EF">Each deposit</h3>
+<p style="font-size:28px;line-height:1.35;color:#EAF6F1">adds a tiny fixed fee in BNB, a few cents</p>
+</div>
+<x-connector style="width:72px;color:#14213D;border-width:4px"></x-connector>
+<div style="flex:1;display:flex;flex-direction:column;gap:12px;background:#14213D;border-radius:16px;padding:32px">
+<h3 style="font-size:36px;font-weight:700;color:#F7F5EF">Gas fund</h3>
+<p style="font-size:28px;line-height:1.35;color:#C9D3E3">in the vault, apart from users’ USDT; fee drops to zero when it is full</p>
+</div>
+<x-connector style="width:72px;color:#14213D;border-width:4px"></x-connector>
+<div style="flex:1;display:flex;flex-direction:column;gap:12px;background:#FFFFFF;border:2px solid #1F8A70;border-radius:16px;padding:32px">
+<h3 style="font-size:36px;font-weight:700">Refund</h3>
+<p style="font-size:28px;line-height:1.35;color:#3D4A63">to whoever sends a signed update to the vault</p>
+</div>
+</div>
+<div style="display:flex;flex-direction:column;gap:16px">
+<p style="font-size:32px;line-height:1.4">Signing is free. Sending an update (new signer list, cap, pause, bond release) costs gas: the relayer’s software sends it and gets the gas back.</p>
+<p style="font-size:32px;line-height:1.4">Users pay only their own transactions and the tiny deposit fee. Withdrawals stay 1 to 1.</p>
+</div>
+<aside>Converting USDT to BNB inside the vault was considered and rejected: it would make the vault call an exchange, adding risk to the contract that holds everyone’s USDT. The BNB comes directly from depositors, who already hold BNB for their own gas.</aside>
+</section></div>
+<div class="slide" id="s7"><section id="relayer-founders" data-transition="fade" style="background:#F7F5EF;color:#14213D;font-family:Inter, Arial, sans-serif;padding:128px;display:flex;flex-direction:column;gap:40px">
+<h2 style="font-family:'Space Grotesk', Arial, sans-serif;font-size:72px;font-weight:700">Founders: starting the bridge</h2>
+<div style="display:flex;flex-direction:column;gap:20px">
+<div style="display:flex;flex-direction:row;align-items:center;gap:28px;background:#FFFFFF;border-radius:16px;padding:22px 32px">
+<p style="font-size:32px;font-weight:600;width:56px;color:#3A6EA5">1</p>
+<p style="flex:1;font-size:30px;line-height:1.35">One person publishes the Credits contract. It gives them no key, fee or extra vote. Nothing works yet.</p>
+</div>
+<div style="display:flex;flex-direction:row;align-items:center;gap:28px;background:#FFFFFF;border-radius:16px;padding:22px 32px">
+<p style="font-size:32px;font-weight:600;width:56px;color:#E07A1F">2</p>
+<p style="flex:1;font-size:30px;line-height:1.35">Each founder locks <b>100,000 CS</b> and applies. With no relayers yet, the applicants check each other’s delegations.</p>
+</div>
+<div style="display:flex;flex-direction:row;align-items:center;gap:28px;background:#FFFFFF;border-radius:16px;padding:22px 32px">
+<p style="font-size:32px;font-weight:600;width:56px;color:#3A6EA5">3</p>
+<p style="flex:1;font-size:30px;line-height:1.35">With <b>at least 3</b> confirmed founders, one of them activates the contract. Fewer than 3: nothing starts, bonds come back.</p>
+</div>
+<div style="display:flex;flex-direction:row;align-items:center;gap:28px;background:#FFFFFF;border-radius:16px;padding:22px 32px">
+<p style="font-size:32px;font-weight:600;width:56px;color:#1F8A70">4</p>
+<p style="flex:1;font-size:30px;line-height:1.35">The vault is published on BSC with the founders as signers; each adds <b>50 USDT</b>. The founders link it on Credits: deposits open.</p>
+</div>
+</div>
+<p style="font-size:28px;color:#3D4A63">Founders keep this low bond for good. The founder phase ends at the first CS purchase of 100 csUSDT or more, after 6 months, or at 7 relayers.</p>
+<aside>During the founder phase the vault holds at most 10,000 USDT at first, never more than 20,000, because the security rests on a few people who know each other. The official address is announced only after the link, together with the founders’ node wallets, so anyone can check them.</aside>
+</section></div>
+<div class="slide" id="s8"><section id="relayer-later" data-transition="fade" style="background:#F7F5EF;color:#14213D;font-family:Inter, Arial, sans-serif;padding:128px;display:flex;flex-direction:column;gap:40px">
+<h2 style="font-family:'Space Grotesk', Arial, sans-serif;font-size:72px;font-weight:700">Joining once the bridge is running</h2>
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:32px">
+<div style="display:flex;flex-direction:column;gap:16px;background:#FFFFFF;border:2px solid #3A6EA5;border-radius:16px;padding:40px">
+<p style="font-size:26px;color:#3A6EA5;font-weight:600;text-transform:uppercase;letter-spacing:2px">Joining</p>
+<p style="font-size:30px;line-height:1.4;color:#14213D"><b>Bond:</b> worth at least 1,000 USDT or 10 % of the vault, whichever is more; at least half in CS, at least 50 USDT in the vault.</p>
+<p style="font-size:30px;line-height:1.4;color:#14213D"><b>7-day wait</b>, then active automatically once enough relayers confirm the delegations. Nobody can object.</p>
+<p style="font-size:30px;line-height:1.4;color:#14213D">Refused only if its CS would leave the vault cap uncovered.</p>
+</div>
+<div style="display:flex;flex-direction:column;gap:16px;background:#FFFFFF;border:2px solid #14213D;border-radius:16px;padding:40px">
+<p style="font-size:26px;color:#14213D;font-weight:600;text-transform:uppercase;letter-spacing:2px">Staying</p>
+<p style="font-size:30px;line-height:1.4;color:#14213D"><b>Inactive</b>, bond kept: below 50 % of the work in 14 days, or delegations under 1M for 30 days. Back to active once fixed.</p>
+<p style="font-size:30px;line-height:1.4;color:#14213D">A bond fixed at entry never rises later.</p>
+<p style="font-size:30px;line-height:1.4;color:#14213D">Rewards: an equal share of the hourly CS buyback, 20 % to the owner, 80 % to the delegators.</p>
+</div>
+</div>
+<aside>The entry bond grows with the vault, so a bigger bridge asks more of those who join it. A relayer that falls inactive keeps its bond and comes back when the cause is fixed.</aside>
+</section></div>
+<div class="slide" id="s9"><section id="relayer-exit" data-transition="fade" style="background:#F7F5EF;color:#14213D;font-family:Inter, Arial, sans-serif;padding:128px;display:flex;flex-direction:column;gap:36px">
+<h2 style="font-family:'Space Grotesk', Arial, sans-serif;font-size:72px;font-weight:700">Leaving: getting the bond back</h2>
+<div style="display:flex;flex-direction:column;gap:18px">
+<div style="display:flex;flex-direction:row;align-items:center;gap:28px;background:#FFFFFF;border-radius:16px;padding:20px 32px">
+<p style="font-size:28px;font-weight:600;width:150px;color:#3A6EA5">Day 0</p>
+<p style="flex:1;font-size:30px;line-height:1.35">The relayer calls “leave” on Credits, signed also by its BSC wallet, and stops approving and signing.</p>
+</div>
+<div style="display:flex;flex-direction:row;align-items:center;gap:28px;background:#FFFFFF;border-radius:16px;padding:20px 32px">
+<p style="font-size:28px;font-weight:600;width:150px;color:#1F8A70">Hours</p>
+<p style="flex:1;font-size:30px;line-height:1.35">The other relayers update the vault’s signer list: its BSC key stops counting.</p>
+</div>
+<div style="display:flex;flex-direction:row;align-items:center;gap:28px;background:#FFFFFF;border-radius:16px;padding:20px 32px">
+<p style="font-size:28px;font-weight:600;width:150px;color:#14213D">30 days</p>
+<p style="flex:1;font-size:30px;line-height:1.35">Waiting time: any false signature it made can still be proven. Then the <b>CS</b> come back to its wallet, and the <b>USDT</b> with the relayers’ signatures.</p>
+</div>
+<div style="display:flex;flex-direction:row;align-items:center;gap:28px;background:#FFFFFF;border-radius:16px;padding:20px 32px">
+<p style="font-size:28px;font-weight:600;width:150px;color:#E07A1F">60 days</p>
+<p style="flex:1;font-size:30px;line-height:1.35">If the signatures never came, the relayer takes its <b>USDT</b> back alone, with no one’s permission.</p>
+</div>
+</div>
+<p style="font-size:28px;color:#3D4A63">The CS go to the safe Credits address the BSC wallet signed, the USDT to the BSC wallet: nobody can redirect them.</p>
+<aside>The CS part is released by the Credits contract itself after the 30 days. The USDT part is released on BSC: normally with the signatures of the remaining relayers, which their software gives automatically; if they are withheld, after 60 days the vault pays it without signatures. The only exception is a proven false signature: then the bond goes to the reserve, with 30 days to appeal.</aside>
+</section></div>
+<div class="slide" id="s10"><section id="a-setup" data-transition="fade" style="background:#14213D;color:#F7F5EF;font-family:Inter, Arial, sans-serif;padding:128px;display:flex;flex-direction:column;gap:48px">
+<p style="font-size:28px;color:#7FC8A9;letter-spacing:4px;text-transform:uppercase">Scenario A · three relayers</p>
+<h2 style="font-family:'Space Grotesk', Arial, sans-serif;font-size:72px;font-weight:700;color:#F7F5EF">The cast</h2>
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:32px">
+<div style="display:flex;flex-direction:column;gap:16px;background:#1E2F52;border-radius:16px;padding:40px">
+<h3 style="font-size:40px;font-weight:700;color:#F7F5EF">Relayers R1, R2, R3</h3>
+<p style="font-size:30px;line-height:1.4;color:#C9D3E3">The three founders. Threshold <b>2 of 3</b>: any two can approve or sign, so one may be offline.</p>
+</div>
+<div style="display:flex;flex-direction:column;gap:16px;background:#1E2F52;border-radius:16px;padding:40px">
+<h3 style="font-size:40px;font-weight:700;color:#F7F5EF">Users</h3>
+<p style="font-size:30px;line-height:1.4;color:#C9D3E3"><b>Bob</b> has CS, wants dollars. <b>Alice</b> and <b>Carol</b> have USDT on BSC, want CS.</p>
+</div>
+</div>
+<p style="font-size:32px;line-height:1.4;color:#C9D3E3">Starting price: 0.020 csUSDT per CS, voted by the relayers. Today offers must stay between 0.019 and 0.024.</p>
+<aside>The starting price is the conservative price the relayers vote before trading opens. After the first day, the reference is the average price of the previous day’s trades of at least 100 csUSDT.</aside>
+</section></div>
+<div class="slide" id="s11"><section id="a-deposit" data-transition="fade" style="background:#F7F5EF;color:#14213D;font-family:Inter, Arial, sans-serif;padding:128px;display:flex;flex-direction:column;gap:40px">
+<h2 style="font-family:'Space Grotesk', Arial, sans-serif;font-size:72px;font-weight:700">Alice deposits 100 USDT</h2>
+<div style="display:flex;flex-direction:column;gap:20px">
+<div style="display:flex;flex-direction:row;align-items:center;gap:28px;background:#FFFFFF;border-radius:16px;padding:24px 32px">
+<p style="font-size:32px;font-weight:600;width:56px;color:#E07A1F">1</p>
+<p style="flex:1;font-size:30px;line-height:1.35">Bob sends 50,000 CS to the contract with the note “ask 0.020”: his CS wait in escrow.</p>
+<p style="font-size:26px;background:#E07A1F;color:#14213D;padding:8px 20px;border-radius:999px;white-space:nowrap">CS: Bob → escrow</p>
+</div>
+<div style="display:flex;flex-direction:row;align-items:center;gap:28px;background:#FFFFFF;border-radius:16px;padding:24px 32px">
+<p style="font-size:32px;font-weight:600;width:56px;color:#1F8A70">2</p>
+<p style="flex:1;font-size:30px;line-height:1.35">Alice deposits 100 USDT into the vault on BSC, plus the 0.0001 BNB gas fee that goes to the vault’s gas pool. It becomes deposit no. 0.</p>
+<p style="font-size:26px;background:#1F8A70;color:#F7F5EF;padding:8px 20px;border-radius:999px;white-space:nowrap">USDT + BNB → vault</p>
+</div>
+<div style="display:flex;flex-direction:row;align-items:center;gap:28px;background:#FFFFFF;border-radius:16px;padding:24px 32px">
+<p style="font-size:32px;font-weight:600;width:56px;color:#3A6EA5">3</p>
+<p style="flex:1;font-size:30px;line-height:1.35">R1 and R2 see it and approve on Credits. R3 is offline: 2 of 3 is enough, 100 csUSDT are created.</p>
+<p style="font-size:26px;background:#3A6EA5;color:#F7F5EF;padding:8px 20px;border-radius:999px;white-space:nowrap">csUSDT: minted 100</p>
+</div>
+<div style="display:flex;flex-direction:row;align-items:center;gap:28px;background:#FFFFFF;border-radius:16px;padding:24px 32px">
+<p style="font-size:32px;font-weight:600;width:56px;color:#3A6EA5">4</p>
+<p style="flex:1;font-size:30px;line-height:1.35">0.05 goes to the fee fund. 2 % (1.999) buys CS from Bob’s offer: Alice gets ≈ 99.85 CS to pay her fees and ≈ 97.95 csUSDT.</p>
+<p style="font-size:26px;background:#E07A1F;color:#14213D;padding:8px 20px;border-radius:999px;white-space:nowrap">CS: escrow → Alice</p>
+</div>
+</div>
+<p style="font-size:28px;color:#3D4A63">When R3 comes back and approves too, the answer is “done”: a deposit is never minted twice.</p>
+<aside>Alice needed only BNB: for the gas of her deposit and the tiny gas fee, a few cents in all. She had no CS before; the automatic conversion gave her enough for hundreds of Credits transactions. Bob, whose offer was the cheapest, received about 1.997 csUSDT.</aside>
+</section></div>
+<div class="slide" id="s12"><section id="a-trade" data-transition="fade" style="background:#F7F5EF;color:#14213D;font-family:Inter, Arial, sans-serif;padding:128px;display:flex;flex-direction:column;gap:40px">
+<h2 style="font-family:'Space Grotesk', Arial, sans-serif;font-size:72px;font-weight:700">Carol deposits and buys CS</h2>
+<div style="display:flex;flex-direction:column;gap:20px">
+<div style="display:flex;flex-direction:row;align-items:center;gap:28px;background:#FFFFFF;border-radius:16px;padding:24px 32px">
+<p style="font-size:32px;font-weight:600;width:56px;color:#1F8A70">5</p>
+<p style="flex:1;font-size:30px;line-height:1.35">Carol deposits 500 USDT (+ 0.0001 BNB to the gas pool). R2 and R3 approve: 500 csUSDT minted, 2 % converted (≈ 499 CS), ≈ 489.95 csUSDT to Carol.</p>
+<p style="font-size:26px;background:#1F8A70;color:#F7F5EF;padding:8px 20px;border-radius:999px;white-space:nowrap">USDT: Carol → vault</p>
+</div>
+<div style="display:flex;flex-direction:row;align-items:center;gap:28px;background:#FFFFFF;border-radius:16px;padding:24px 32px">
+<p style="font-size:32px;font-weight:600;width:56px;color:#E07A1F">6</p>
+<p style="flex:1;font-size:30px;line-height:1.35">Carol buys 10,000 CS from Bob’s offer at 0.020: she pays 200 csUSDT to Bob and 0.20 (0.1 %) to the fee fund.</p>
+<p style="font-size:26px;background:#3A6EA5;color:#F7F5EF;padding:8px 20px;border-radius:999px;white-space:nowrap">csUSDT: Carol → Bob</p>
+</div>
+<div style="display:flex;flex-direction:row;align-items:center;gap:28px;background:#FFFFFF;border-radius:16px;padding:24px 32px">
+<p style="font-size:32px;font-weight:600;width:56px;color:#E07A1F">7</p>
+<p style="flex:1;font-size:30px;line-height:1.35">The 10,000 CS leave Bob’s escrow and go to Carol, in the same transaction: either both sides move or neither.</p>
+<p style="font-size:26px;background:#E07A1F;color:#14213D;padding:8px 20px;border-radius:999px;white-space:nowrap">CS: escrow → Carol</p>
+</div>
+</div>
+<p style="font-size:28px;color:#3D4A63">No middleman holds anything: the order book lives inside the bridge contract.</p>
+<aside>The trade is atomic. Bob does not need to be online: his offer stays in the book until someone takes it or he cancels it.</aside>
+</section></div>
+<div class="slide" id="s13"><section id="a-withdraw" data-transition="fade" style="background:#F7F5EF;color:#14213D;font-family:Inter, Arial, sans-serif;padding:128px;display:flex;flex-direction:column;gap:40px">
+<h2 style="font-family:'Space Grotesk', Arial, sans-serif;font-size:72px;font-weight:700">Bob takes 200 dollars home</h2>
+<div style="display:flex;flex-direction:column;gap:20px">
+<div style="display:flex;flex-direction:row;align-items:center;gap:28px;background:#FFFFFF;border-radius:16px;padding:24px 32px">
+<p style="font-size:32px;font-weight:600;width:56px;color:#3A6EA5">8</p>
+<p style="flex:1;font-size:30px;line-height:1.35">Bob calls “burn for BSC” with 200 csUSDT and his BSC address: 0.05 to the fee fund, 199.95 destroyed, withdrawal no. 0 recorded.</p>
+<p style="font-size:26px;background:#3A6EA5;color:#F7F5EF;padding:8px 20px;border-radius:999px;white-space:nowrap">csUSDT: burned</p>
+</div>
+<div style="display:flex;flex-direction:row;align-items:center;gap:28px;background:#FFFFFF;border-radius:16px;padding:24px 32px">
+<p style="font-size:32px;font-weight:600;width:56px;color:#14213D">9</p>
+<p style="flex:1;font-size:30px;line-height:1.35">About 13 seconds later (10 Credits blocks), R1 and R3 sign “withdrawal 0: 199.95 to Bob” and publish their signatures. Signing costs nothing.</p>
+<p style="font-size:26px;background:#14213D;color:#F7F5EF;padding:8px 20px;border-radius:999px;white-space:nowrap">2 signatures</p>
+</div>
+<div style="display:flex;flex-direction:row;align-items:center;gap:28px;background:#FFFFFF;border-radius:16px;padding:24px 32px">
+<p style="font-size:32px;font-weight:600;width:56px;color:#1F8A70">10</p>
+<p style="flex:1;font-size:30px;line-height:1.35">Bob opens the claim page, which collects them, and sends the claim on BSC. Under 1,000 USDT: paid at once.</p>
+<p style="font-size:26px;background:#1F8A70;color:#F7F5EF;padding:8px 20px;border-radius:999px;white-space:nowrap">USDT: vault → Bob</p>
+</div>
+</div>
+<p style="font-size:28px;color:#3D4A63">The vault pays each withdrawal number only once, and only with the signatures of 2 of the 3 relayers.</p>
+<aside>Bob pays the BSC gas of his claim in BNB, and a small CS fee for the burn. The relayers never hold his money: they only sign what they see on Credits.</aside>
+</section></div>
+<div class="slide" id="s14"><section id="a-gas" data-transition="fade" style="background:#F7F5EF;color:#14213D;font-family:Inter, Arial, sans-serif;padding:128px;display:flex;flex-direction:column;gap:40px">
+<h2 style="font-family:'Space Grotesk', Arial, sans-serif;font-size:72px;font-weight:700">A relayer uses the gas pool</h2>
+<div style="display:flex;flex-direction:column;gap:20px">
+<div style="display:flex;flex-direction:row;align-items:center;gap:28px;background:#FFFFFF;border-radius:16px;padding:24px 32px">
+<p style="font-size:32px;font-weight:600;width:56px;color:#1F8A70">11</p>
+<p style="flex:1;font-size:30px;line-height:1.35">The pool holds 0.0002 BNB: the fees of Alice’s and Carol’s deposits.</p>
+<p style="font-size:26px;background:#1F8A70;color:#F7F5EF;padding:8px 20px;border-radius:999px;white-space:nowrap">Pool: 0.0002 BNB</p>
+</div>
+<div style="display:flex;flex-direction:row;align-items:center;gap:28px;background:#FFFFFF;border-radius:16px;padding:24px 32px">
+<p style="font-size:32px;font-weight:600;width:56px;color:#14213D">12</p>
+<p style="flex:1;font-size:30px;line-height:1.35">R2 changes its signing key. R1, R2 and R3 sign the new signer list: signing is free.</p>
+<p style="font-size:26px;background:#14213D;color:#F7F5EF;padding:8px 20px;border-radius:999px;white-space:nowrap">3 signatures</p>
+</div>
+<div style="display:flex;flex-direction:row;align-items:center;gap:28px;background:#FFFFFF;border-radius:16px;padding:24px 32px">
+<p style="font-size:32px;font-weight:600;width:56px;color:#1F8A70">13</p>
+<p style="flex:1;font-size:30px;line-height:1.35">R1’s software sends it to the vault first and pays the gas; the vault refunds it from the pool.</p>
+<p style="font-size:26px;background:#1F8A70;color:#F7F5EF;padding:8px 20px;border-radius:999px;white-space:nowrap">Pool → R1: ≈ 0.00002 BNB</p>
+</div>
+</div>
+<p style="font-size:28px;color:#3D4A63">R1 is not out of pocket, and the update reaches the vault within minutes. About 0.00018 BNB stay in the pool for the next one.</p>
+<aside>The refund amount is an estimate, to be measured on BSC testnet. Only the first submission that changes something is refunded, with limits per call and per hour, so nobody can empty the pool by sending updates in a loop.</aside>
+</section></div>
+<div class="slide" id="s15"><section id="a-balance" data-transition="fade" style="background:#F7F5EF;color:#14213D;font-family:Inter, Arial, sans-serif;padding:128px;display:flex;flex-direction:column;gap:40px">
+<h2 style="font-family:'Space Grotesk', Arial, sans-serif;font-size:72px;font-weight:700">Where everything is now</h2>
+<table style="font-family:Inter, Arial, sans-serif;font-size:30px;color:#14213D">
+<tr><th style="width:28%;text-align:left">Who</th><th style="width:22%;text-align:right">USDT on BSC</th><th style="width:22%;text-align:right">csUSDT</th><th style="width:28%;text-align:right">CS</th></tr>
+<tr><td style="text-align:left">Vault (users’ USDT)</td><td style="text-align:right">400.05</td><td style="text-align:right">—</td><td style="text-align:right">—</td></tr>
+<tr><td style="text-align:left">Vault gas pool</td><td style="text-align:right">≈ 0.00018 BNB</td><td style="text-align:right">—</td><td style="text-align:right">—</td></tr>
+<tr><td style="text-align:left">Alice</td><td style="text-align:right">—</td><td style="text-align:right">97.95</td><td style="text-align:right">99.85</td></tr>
+<tr><td style="text-align:left">Carol</td><td style="text-align:right">—</td><td style="text-align:right">289.75</td><td style="text-align:right">10,499.45</td></tr>
+<tr><td style="text-align:left">Bob</td><td style="text-align:right">+199.95</td><td style="text-align:right">11.99</td><td style="text-align:right">39,400.70 on offer</td></tr>
+<tr><td style="text-align:left">Fee fund</td><td style="text-align:right">—</td><td style="text-align:right">0.36</td><td style="text-align:right">—</td></tr>
+<tr style="background:#E3ECF6"><td style="text-align:left">csUSDT in circulation</td><td style="text-align:right"></td><td style="text-align:right">400.05</td><td style="text-align:right"></td></tr>
+</table>
+<p style="font-size:32px;line-height:1.4;color:#14213D"><b>400.05 csUSDT</b> on Credits are backed by <b>400.05 USDT</b> in the vault. The rule holds.</p>
+<aside>600 USDT came in (100 from Alice, 500 from Carol) and 199.95 went out to Bob. The 0.05 fee of Bob’s withdrawal stays as csUSDT in the fee fund, still backed by the vault. The gas pool received 0.0002 BNB from the two deposits and paid about 0.00002 BNB back to R1 for sending a signer-list update (previous slide); it is kept apart from users’ USDT. Amounts are rounded; the contract keeps 8 decimals for csUSDT and 6 for CS.</aside>
+</section></div>
+<div class="slide" id="s16"><section id="a-rewards" data-transition="fade" style="background:#F7F5EF;color:#14213D;font-family:Inter, Arial, sans-serif;padding:128px;display:flex;flex-direction:column;gap:48px">
+<h2 style="font-family:'Space Grotesk', Arial, sans-serif;font-size:72px;font-weight:700">How the relayers are paid</h2>
+<div style="display:flex;flex-direction:row;align-items:center;gap:0px">
+<div style="flex:1;display:flex;flex-direction:column;gap:12px;background:#3A6EA5;border-radius:16px;padding:32px">
+<h3 style="font-size:36px;font-weight:700;color:#F7F5EF">Fees</h3>
+<p style="font-size:28px;line-height:1.35;color:#EAF0F8">0.05 per deposit or withdrawal, 0.1 % per trade</p>
+</div>
+<x-connector style="width:72px;color:#14213D;border-width:4px"></x-connector>
+<div style="flex:1;display:flex;flex-direction:column;gap:12px;background:#E07A1F;border-radius:16px;padding:32px">
+<h3 style="font-size:36px;font-weight:700;color:#14213D">Hourly buyback</h3>
+<p style="font-size:28px;line-height:1.35;color:#14213D">Each hour 1/168 of the week’s fund buys CS from the cheapest offers</p>
+</div>
+<x-connector style="width:72px;color:#14213D;border-width:4px"></x-connector>
+<div style="flex:1;display:flex;flex-direction:column;gap:12px;background:#14213D;border-radius:16px;padding:32px">
+<h3 style="font-size:36px;font-weight:700;color:#F7F5EF">Split weekly</h3>
+<p style="font-size:28px;line-height:1.35;color:#C9D3E3">Equal shares to relayers that did ≥ 80 % of the work</p>
+</div>
+<x-connector style="width:72px;color:#14213D;border-width:4px"></x-connector>
+<div style="flex:1;display:flex;flex-direction:column;gap:12px;background:#FFFFFF;border:2px solid #14213D;border-radius:16px;padding:32px">
+<h3 style="font-size:36px;font-weight:700">Each share</h3>
+<p style="font-size:28px;line-height:1.35;color:#3D4A63">20 % to the node owner, 80 % to its delegators</p>
+</div>
+</div>
+<p style="font-size:32px;line-height:1.4;color:#3D4A63">In scenario A the fund holds 0.36 csUSDT: it buys about 18 CS, about 6 CS per relayer. More traffic, proportionally more. Every fee turns into demand for CS.</p>
+<aside>Spreading the buyback over 168 hourly slices means that nobody can grab the whole fund with one badly priced offer at the right moment. The CS bought go to the relayers and, through them, to the people who delegated 1M CS to their nodes.</aside>
+</section></div>
+<div class="slide" id="s17"><section id="b-setup" data-transition="fade" style="background:#14213D;color:#F7F5EF;font-family:Inter, Arial, sans-serif;padding:128px;display:flex;flex-direction:column;gap:48px">
+<p style="font-size:28px;color:#7FC8A9;letter-spacing:4px;text-transform:uppercase">Scenario B · seven relayers</p>
+<h2 style="font-family:'Space Grotesk', Arial, sans-serif;font-size:72px;font-weight:700;color:#F7F5EF">When something goes wrong</h2>
+<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:32px">
+<div style="display:flex;flex-direction:column;gap:16px;background:#1E2F52;border-radius:16px;padding:40px">
+<h3 style="font-size:40px;font-weight:700;color:#F7F5EF">R1, R2, R3</h3>
+<p style="font-size:30px;line-height:1.4;color:#C9D3E3">Founders. They also form the <b>whitelist</b> that can skip the 24-hour wait.</p>
+</div>
+<div style="display:flex;flex-direction:column;gap:16px;background:#1E2F52;border-radius:16px;padding:40px">
+<h3 style="font-size:40px;font-weight:700;color:#F7F5EF">R4 – R7</h3>
+<p style="font-size:30px;line-height:1.4;color:#C9D3E3">Joined later, each with 1M CS of delegations and a bond.</p>
+</div>
+<div style="display:flex;flex-direction:column;gap:16px;background:#1E2F52;border-radius:16px;padding:40px">
+<h3 style="font-size:40px;font-weight:700;color:#F7F5EF">The numbers</h3>
+<p style="font-size:30px;line-height:1.4;color:#C9D3E3">Threshold <b>4 of 7</b>. Unpause needs <b>5</b>. Whitelist majority: <b>2 of 3</b>.</p>
+</div>
+</div>
+<p style="font-size:32px;line-height:1.4;color:#C9D3E3">Users: Erin moves larger amounts, Frank small ones, Grace sells CS.</p>
+<aside>With seven relayers the threshold is half plus one, that is four. Lifting a pause needs two thirds, that is five. These rules make one wrong or dishonest relayer harmless, and a dishonest group expensive.</aside>
+</section></div>
+<div class="slide" id="s18"><section id="b-wrong" data-transition="fade" style="background:#F7F5EF;color:#14213D;font-family:Inter, Arial, sans-serif;padding:128px;display:flex;flex-direction:column;gap:48px">
+<h2 style="font-family:'Space Grotesk', Arial, sans-serif;font-size:72px;font-weight:700">One offline, one wrong: still minted</h2>
+<p style="font-size:32px;line-height:1.4;color:#3D4A63">Erin deposits 1,500 USDT. What each relayer sends to Credits:</p>
+<div style="display:grid;grid-template-columns:repeat(7, 1fr);gap:16px">
+<div style="display:flex;flex-direction:column;gap:8px;background:#3A6EA5;border-radius:12px;padding:24px"><h3 style="font-size:36px;color:#F7F5EF">R1</h3><p style="font-size:26px;color:#EAF0F8">1,500</p></div>
+<div style="display:flex;flex-direction:column;gap:8px;background:#3A6EA5;border-radius:12px;padding:24px"><h3 style="font-size:36px;color:#F7F5EF">R2</h3><p style="font-size:26px;color:#EAF0F8">1,500</p></div>
+<div style="display:flex;flex-direction:column;gap:8px;background:#DDE3EA;border-radius:12px;padding:24px"><h3 style="font-size:36px;color:#3D4A63">R3</h3><p style="font-size:26px;color:#3D4A63">late</p></div>
+<div style="display:flex;flex-direction:column;gap:8px;background:#3A6EA5;border-radius:12px;padding:24px"><h3 style="font-size:36px;color:#F7F5EF">R4</h3><p style="font-size:26px;color:#EAF0F8">1,500</p></div>
+<div style="display:flex;flex-direction:column;gap:8px;background:#DDE3EA;border-radius:12px;padding:24px"><h3 style="font-size:36px;color:#3D4A63">R5</h3><p style="font-size:26px;color:#3D4A63">offline</p></div>
+<div style="display:flex;flex-direction:column;gap:8px;background:#3A6EA5;border-radius:12px;padding:24px"><h3 style="font-size:36px;color:#F7F5EF">R6</h3><p style="font-size:26px;color:#EAF0F8">1,500</p></div>
+<div style="display:flex;flex-direction:column;gap:8px;background:#F4D6BC;border:3px solid #C05A12;border-radius:12px;padding:24px"><h3 style="font-size:36px;color:#14213D">R7</h3><p style="font-size:26px;color:#14213D">1,600 wrong</p></div>
+</div>
+<div style="display:flex;flex-direction:column;gap:16px">
+<p style="font-size:32px;line-height:1.4">Four identical approvals reach the threshold: <b>1,500 csUSDT minted</b>. Erin gets ≈ 1,479.95 csUSDT and the CS bought with 20 csUSDT (the conversion maximum).</p>
+<p style="font-size:32px;line-height:1.4">R7’s different data blocks nothing. It earns R7 a mark: three marks in 7 days make it inactive.</p>
+</div>
+<aside>Approvals are counted per data: only identical data adds up to the threshold. A relayer that sends something different cannot stop or change a mint, it only marks itself.</aside>
+</section></div>
+<div class="slide" id="s19"><section id="b-large" data-transition="fade" style="background:#F7F5EF;color:#14213D;font-family:Inter, Arial, sans-serif;padding:128px;display:flex;flex-direction:column;gap:48px">
+<h2 style="font-family:'Space Grotesk', Arial, sans-serif;font-size:72px;font-weight:700">Erin withdraws 1,200</h2>
+<p style="font-size:32px;line-height:1.4;color:#3D4A63">Above 1,000 USDT the vault looks at who signed.</p>
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:32px">
+<div style="display:flex;flex-direction:column;gap:16px;background:#FFFFFF;border:2px solid #1F8A70;border-radius:16px;padding:40px">
+<p style="font-size:26px;color:#1F8A70;font-weight:600;text-transform:uppercase;letter-spacing:2px">Paid at once</p>
+<h3 style="font-size:40px;font-weight:700">Signed by R1, R2, R4, R6</h3>
+<p style="font-size:30px;line-height:1.4;color:#3D4A63">Two founders of three are among the signers: the whitelist vouches for it.</p>
+</div>
+<div style="display:flex;flex-direction:column;gap:16px;background:#FFFFFF;border:2px solid #E07A1F;border-radius:16px;padding:40px">
+<p style="font-size:26px;color:#C05A12;font-weight:600;text-transform:uppercase;letter-spacing:2px">Paid after 24 hours</p>
+<h3 style="font-size:40px;font-weight:700">Signed by R4, R5, R6, R7</h3>
+<p style="font-size:30px;line-height:1.4;color:#3D4A63">No founder signed: the claim waits a day. Every relayer can check it and pause if it is false.</p>
+</div>
+</div>
+<p style="font-size:32px;line-height:1.4">Over 24 hours the vault pays at most <b>2,000 USDT</b>. A bigger withdrawal is split into several smaller ones.</p>
+<aside>The 24-hour wait turns a theft by newcomers into something everyone can see and stop. The daily cap limits how much can leave the vault in one day, whatever happens.</aside>
+</section></div>
+<div class="slide" id="s20"><section id="b-false" data-transition="fade" style="background:#F7F5EF;color:#14213D;font-family:Inter, Arial, sans-serif;padding:128px;display:flex;flex-direction:column;gap:40px">
+<h2 style="font-family:'Space Grotesk', Arial, sans-serif;font-size:72px;font-weight:700">A false signature costs the bond</h2>
+<div style="display:flex;flex-direction:column;gap:20px">
+<div style="display:flex;flex-direction:row;align-items:center;gap:28px;background:#FFFFFF;border-radius:16px;padding:24px 32px">
+<p style="font-size:32px;font-weight:600;width:56px;color:#C05A12">1</p>
+<p style="flex:1;font-size:30px;line-height:1.35">R7 alone signs “pay 900 USDT to R7” for a withdrawal Credits never recorded. The vault needs 4 signatures: nothing is paid.</p>
+</div>
+<div style="display:flex;flex-direction:row;align-items:center;gap:28px;background:#FFFFFF;border-radius:16px;padding:24px 32px">
+<p style="font-size:32px;font-weight:600;width:56px;color:#C05A12">2</p>
+<p style="flex:1;font-size:30px;line-height:1.35">Anyone who sees the signature sends it to the Credits contract as proof. The contract checks it and finds no such withdrawal.</p>
+</div>
+<div style="display:flex;flex-direction:row;align-items:center;gap:28px;background:#FFFFFF;border-radius:16px;padding:24px 32px">
+<p style="font-size:32px;font-weight:600;width:56px;color:#C05A12">3</p>
+<p style="flex:1;font-size:30px;line-height:1.35">R7 is removed at once and its bond (CS and USDT) goes to the reserve. Now 6 relayers: threshold 4, unpause 4.</p>
+</div>
+<div style="display:flex;flex-direction:row;align-items:center;gap:28px;background:#FFFFFF;border-radius:16px;padding:24px 32px">
+<p style="font-size:32px;font-weight:600;width:56px;color:#C05A12">4</p>
+<p style="flex:1;font-size:30px;line-height:1.35">R7 has 30 days to appeal (a stolen key, for example). The reserve moves only with a two-thirds vote: 4 of the 6.</p>
+</div>
+</div>
+<aside>The check runs inside the Java contract: it recovers the signer from the BSC signature, the same way the vault does, in about 14 ms. Ten percent of the confiscated CS is set aside for whoever brought the proof, paid by the same two-thirds vote.</aside>
+</section></div>
+<div class="slide" id="s21"><section id="b-pause" data-transition="fade" style="background:#F7F5EF;color:#14213D;font-family:Inter, Arial, sans-serif;padding:128px;display:flex;flex-direction:column;gap:48px">
+<h2 style="font-family:'Space Grotesk', Arial, sans-serif;font-size:72px;font-weight:700">The emergency brake</h2>
+<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:32px">
+<div style="display:flex;flex-direction:column;gap:16px;background:#FFFFFF;border:2px solid #E07A1F;border-radius:16px;padding:40px">
+<p style="font-size:26px;color:#C05A12;font-weight:600;text-transform:uppercase;letter-spacing:2px">Pause</p>
+<h3 style="font-size:36px;font-weight:700">R1 sees a problem</h3>
+<p style="font-size:30px;line-height:1.4;color:#3D4A63">Deposits and large withdrawals stop. Frank can still withdraw 300: small ones continue within the daily cap.</p>
+</div>
+<div style="display:flex;flex-direction:column;gap:16px;background:#FFFFFF;border:3px solid #C05A12;border-radius:16px;padding:40px">
+<p style="font-size:26px;color:#C05A12;font-weight:600;text-transform:uppercase;letter-spacing:2px">Full pause</p>
+<h3 style="font-size:36px;font-weight:700">R3 pauses too</h3>
+<p style="font-size:30px;line-height:1.4;color:#3D4A63">Two different relayers raised the alarm: everything stops, small withdrawals included, for at most 72 hours unless a third renews it.</p>
+</div>
+<div style="display:flex;flex-direction:column;gap:16px;background:#FFFFFF;border:2px solid #1F8A70;border-radius:16px;padding:40px">
+<p style="font-size:26px;color:#1F8A70;font-weight:600;text-transform:uppercase;letter-spacing:2px">Restart</p>
+<h3 style="font-size:36px;font-weight:700">5 relayers agree</h3>
+<p style="font-size:30px;line-height:1.4;color:#3D4A63">Two thirds lift the pause. If it was unfounded, the pauser is out for 30 days.</p>
+</div>
+</div>
+<p style="font-size:32px;line-height:1.4">Any single relayer can pull the brake, once every 7 days. Releasing it takes many.</p>
+<aside>A single honest relayer is enough to stop a theft while it happens. Limits on how often one can pause stop a careless or hostile relayer from blocking everyone. The full pause expires after 72 hours and falls back to the normal pause, where small withdrawals continue, so two hostile relayers cannot lock users in for good.</aside>
+</section></div>
+<div class="slide" id="s22"><section id="b-band" data-transition="fade" style="background:#F7F5EF;color:#14213D;font-family:Inter, Arial, sans-serif;padding:128px;display:flex;flex-direction:column;gap:48px">
+<h2 style="font-family:'Space Grotesk', Arial, sans-serif;font-size:72px;font-weight:700">The price band protects CS</h2>
+<div style="position:relative;display:flex;flex-direction:column;gap:0px;height:300px;background:#FFFFFF;border-radius:16px">
+<div style="position:absolute;left:520px;top:60px;width:900px;height:120px;background:#E8F3EE;border:2px solid #1F8A70;border-radius:12px"></div>
+<p style="position:absolute;left:540px;top:90px;width:860px;font-size:30px;color:#14213D">Allowed today: 0.019 to 0.024</p>
+<div style="position:absolute;left:160px;top:60px;width:300px;height:120px;background:#F4D6BC;border:2px solid #C05A12;border-radius:12px"></div>
+<p style="position:absolute;left:180px;top:90px;width:260px;font-size:30px;color:#14213D">0.015 refused</p>
+<p style="position:absolute;left:520px;top:210px;width:300px;font-size:26px;color:#3D4A63">−5 % floor</p>
+<p style="position:absolute;left:1120px;top:210px;width:300px;font-size:26px;color:#3D4A63;text-align:right">+20 % ceiling</p>
+</div>
+<div style="display:flex;flex-direction:column;gap:16px">
+<p style="font-size:32px;line-height:1.4">Grace, in a hurry, tries to sell at 0.015: refused. She sells at 0.019.</p>
+<p style="font-size:32px;line-height:1.4">Tomorrow’s reference is today’s average of trades of at least 100 csUSDT between different wallets. The price can fall at most 5 % a day; after 3 days without trades the reference eases down, so the market never freezes.</p>
+</div>
+<aside>The band applies to everyone, including the automatic conversion and the buyback. Its limits can be changed by a relayer vote, within limits written in the code.</aside>
+</section></div>
+<div class="slide" id="s23"><section id="summary" data-transition="fade" style="background:#14213D;color:#F7F5EF;font-family:Inter, Arial, sans-serif;padding:128px;display:flex;flex-direction:column;gap:48px">
+<h2 style="font-family:'Space Grotesk', Arial, sans-serif;font-size:72px;font-weight:700;color:#F7F5EF">Who is protected by what</h2>
+<table style="font-family:Inter, Arial, sans-serif;font-size:30px;color:#F7F5EF">
+<tr><th style="width:38%;text-align:left">Risk</th><th style="width:62%;text-align:left">Protection</th></tr>
+<tr><td>One relayer offline or wrong</td><td>Threshold: the others still agree</td></tr>
+<tr><td>One relayer signs a false withdrawal</td><td>Not enough signatures; proof removes it and takes its bond</td></tr>
+<tr><td>A group of relayers colludes</td><td>Vault cap, 2,000 a day, 24-hour wait, pause by anyone honest</td></tr>
+<tr><td>A seller crashes the price</td><td>Daily band: at most −5 % a day</td></tr>
+<tr><td>The bridge must close</td><td>Withdrawals stay open; each user moves their own funds</td></tr>
+</table>
+<p style="font-size:30px;line-height:1.4;color:#C9D3E3">Full specification and reviews: github.com/CreditsCommunity/bridge, branch docs/spec</p>
+<aside>No design removes all trust: if enough relayers collude they can take up to the vault cap. Everything else in the design is about making that cap small, the theft slow and visible, and the cost high.</aside>
+</section></div>
+</body></html>

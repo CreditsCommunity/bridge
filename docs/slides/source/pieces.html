@@ -1,0 +1,28 @@
+<section id="pieces" data-transition="fade" style="background:#F7F5EF;color:#14213D;font-family:Inter, Arial, sans-serif;padding:128px;display:flex;flex-direction:column;gap:56px">
+<h2 style="font-family:'Space Grotesk', Arial, sans-serif;font-size:72px;font-weight:700">Three pieces, no administrator</h2>
+<div style="display:flex;flex-direction:row;align-items:stretch;gap:0px">
+<div style="flex:1;display:flex;flex-direction:column;gap:16px;background:#FFFFFF;border:2px solid #1F8A70;border-radius:16px;padding:40px">
+<p style="font-size:24px;color:#1F8A70;font-weight:600;text-transform:uppercase;letter-spacing:2px">BSC</p>
+<h3 style="font-size:44px;font-weight:700">UsdtVault</h3>
+<p style="font-size:30px;line-height:1.4;color:#3D4A63">Holds the users’ USDT. Pays a withdrawal only with enough relayer signatures.</p>
+</div>
+<div style="display:flex;flex-direction:column;justify-content:center;padding:0px 16px">
+<x-connector head="both" style="width:96px;color:#14213D;border-width:4px"></x-connector>
+</div>
+<div style="flex:1;display:flex;flex-direction:column;gap:16px;background:#14213D;border-radius:16px;padding:40px">
+<p style="font-size:24px;color:#7FC8A9;font-weight:600;text-transform:uppercase;letter-spacing:2px">In between</p>
+<h3 style="font-size:44px;font-weight:700;color:#F7F5EF">Relayers</h3>
+<p style="font-size:30px;line-height:1.4;color:#C9D3E3">Credits full nodes run by different people. They read both chains and agree on what happened.</p>
+</div>
+<div style="display:flex;flex-direction:column;justify-content:center;padding:0px 16px">
+<x-connector head="both" style="width:96px;color:#14213D;border-width:4px"></x-connector>
+</div>
+<div style="flex:1;display:flex;flex-direction:column;gap:16px;background:#FFFFFF;border:2px solid #3A6EA5;border-radius:16px;padding:40px">
+<p style="font-size:24px;color:#3A6EA5;font-weight:600;text-transform:uppercase;letter-spacing:2px">Credits</p>
+<h3 style="font-size:44px;font-weight:700">CsUsdtBridge</h3>
+<p style="font-size:30px;line-height:1.4;color:#3D4A63">One contract: the csUSDT token, the CS order book, bonds, rewards and votes.</p>
+</div>
+</div>
+<p style="font-size:32px;line-height:1.4;color:#3D4A63">Nothing moves unless a <b>threshold</b> of relayers agrees: half of them plus one, at most 7. No single key can mint or pay.</p>
+<aside>The vault on BSC and the contract on Credits have no owner and cannot be upgraded. The relayers are the only link: each reads both chains on its own and the contracts count how many agree.</aside>
+</section>

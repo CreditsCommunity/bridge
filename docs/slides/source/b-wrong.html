@@ -1,0 +1,18 @@
+<section id="b-wrong" data-transition="fade" style="background:#F7F5EF;color:#14213D;font-family:Inter, Arial, sans-serif;padding:128px;display:flex;flex-direction:column;gap:48px">
+<h2 style="font-family:'Space Grotesk', Arial, sans-serif;font-size:72px;font-weight:700">One offline, one wrong: still minted</h2>
+<p style="font-size:32px;line-height:1.4;color:#3D4A63">Erin deposits 1,500 USDT. What each relayer sends to Credits:</p>
+<div style="display:grid;grid-template-columns:repeat(7, 1fr);gap:16px">
+<div style="display:flex;flex-direction:column;gap:8px;background:#3A6EA5;border-radius:12px;padding:24px"><h3 style="font-size:36px;color:#F7F5EF">R1</h3><p style="font-size:26px;color:#EAF0F8">1,500</p></div>
+<div style="display:flex;flex-direction:column;gap:8px;background:#3A6EA5;border-radius:12px;padding:24px"><h3 style="font-size:36px;color:#F7F5EF">R2</h3><p style="font-size:26px;color:#EAF0F8">1,500</p></div>
+<div style="display:flex;flex-direction:column;gap:8px;background:#DDE3EA;border-radius:12px;padding:24px"><h3 style="font-size:36px;color:#3D4A63">R3</h3><p style="font-size:26px;color:#3D4A63">late</p></div>
+<div style="display:flex;flex-direction:column;gap:8px;background:#3A6EA5;border-radius:12px;padding:24px"><h3 style="font-size:36px;color:#F7F5EF">R4</h3><p style="font-size:26px;color:#EAF0F8">1,500</p></div>
+<div style="display:flex;flex-direction:column;gap:8px;background:#DDE3EA;border-radius:12px;padding:24px"><h3 style="font-size:36px;color:#3D4A63">R5</h3><p style="font-size:26px;color:#3D4A63">offline</p></div>
+<div style="display:flex;flex-direction:column;gap:8px;background:#3A6EA5;border-radius:12px;padding:24px"><h3 style="font-size:36px;color:#F7F5EF">R6</h3><p style="font-size:26px;color:#EAF0F8">1,500</p></div>
+<div style="display:flex;flex-direction:column;gap:8px;background:#F4D6BC;border:3px solid #C05A12;border-radius:12px;padding:24px"><h3 style="font-size:36px;color:#14213D">R7</h3><p style="font-size:26px;color:#14213D">1,600 wrong</p></div>
+</div>
+<div style="display:flex;flex-direction:column;gap:16px">
+<p style="font-size:32px;line-height:1.4">Four identical approvals reach the threshold: <b>1,500 csUSDT minted</b>. Erin gets ≈ 1,479.95 csUSDT and the CS bought with 20 csUSDT (the conversion maximum).</p>
+<p style="font-size:32px;line-height:1.4">R7’s different data blocks nothing. It earns R7 a mark: three marks in 7 days make it inactive.</p>
+</div>
+<aside>Approvals are counted per data: only identical data adds up to the threshold. A relayer that sends something different cannot stop or change a mint, it only marks itself.</aside>
+</section>

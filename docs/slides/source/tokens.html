@@ -1,0 +1,19 @@
+<section id="tokens" data-transition="fade" style="background:#F7F5EF;color:#14213D;font-family:Inter, Arial, sans-serif;padding:128px;display:flex;flex-direction:column;gap:56px">
+<h2 style="font-family:'Space Grotesk', Arial, sans-serif;font-size:72px;font-weight:700">Three kinds of money</h2>
+<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:32px">
+<div style="display:flex;flex-direction:column;gap:20px;background:#1F8A70;border-radius:16px;padding:44px">
+<h3 style="font-size:56px;font-weight:700;color:#F7F5EF">USDT</h3>
+<p style="font-size:30px;line-height:1.4;color:#EAF6F1">Tether’s dollar on BSC. It stays locked in the vault while it is on the Credits side.</p>
+</div>
+<div style="display:flex;flex-direction:column;gap:20px;background:#3A6EA5;border-radius:16px;padding:44px">
+<h3 style="font-size:56px;font-weight:700;color:#F7F5EF">csUSDT</h3>
+<p style="font-size:30px;line-height:1.4;color:#EAF0F8">“Credits Bridged USDT”. Created 1 for 1 when USDT enters the vault, destroyed when it leaves. Not issued by Tether.</p>
+</div>
+<div style="display:flex;flex-direction:column;gap:20px;background:#E07A1F;border-radius:16px;padding:44px">
+<h3 style="font-size:56px;font-weight:700;color:#14213D">CS</h3>
+<p style="font-size:30px;line-height:1.4;color:#14213D">The Credits coin. It pays every Credits transaction fee, and it is traded against csUSDT.</p>
+</div>
+</div>
+<p style="font-size:32px;line-height:1.4;color:#3D4A63">The rule that always holds: <b>csUSDT in circulation + unpaid withdrawals ≤ users’ USDT in the vault.</b></p>
+<aside>Every relayer checks that rule at every cycle. If it ever breaks, any relayer can stop the bridge.</aside>
+</section>

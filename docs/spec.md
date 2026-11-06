@@ -82,7 +82,7 @@ values of [§11](#11-parameters).
 | **Claim page** | A static web page that collects the published signatures and builds the claim. |
 | **EIP-712** | The Ethereum standard for signing structured data; the vault checks relayer signatures with it, bound to the BSC chain id and the vault address so they cannot be replayed elsewhere. |
 | **Finalized block** | A BSC block that can no longer be reorganized (about 1–2 blocks behind the tip). Relayers read deposits only from finalized blocks. |
-| **Signing depth** | How many Credits blocks must follow a burn before relayers sign it (30, to verify). |
+| **Signing depth** | How many Credits blocks must follow a burn before relayers sign it: 10, about 13 seconds on mainnet. |
 | **Bridge fee** | 0.05 csUSDT taken in each direction. |
 
 ### Limits on what can go wrong
@@ -948,8 +948,8 @@ Every cursor and record is written to the store before the corresponding action 
 ### 7.4 Withdrawal loop
 
 1. Read withdrawals from Credits by id, starting at `nextWithdrawalToSign`, only from blocks at
-   least `creditsConfirmations` deep (initial 30, to be set from measured Credits reorganisation
-   depths: TO VERIFY), only while the node is in sync (last block time within 60 s of the wall
+   least `creditsConfirmations` deep (10 blocks, ≈ 13 s; mainnet measured on 2026-11-06 at
+   1.26 s per block, no reorganisation in the available logs), only while the node is in sync (last block time within 60 s of the wall
    clock) and not in an uncertain or fork state (M2). The block of a `burnForBsc` is found with
    `TransactionsGet` on the contract and the transaction's `poolNumber`.
 2. Check the record against the contract's stored hash; build `Claim`; sign; store with the
@@ -1349,7 +1349,7 @@ withdrawals, so a false alarm never locks users out.
 | Delegation-drop grace | 30 days | code | — |
 | Bond lock after exit | 30 days after the vault removed the key, plus pauses started | code | — |
 | Pause limits | once per 7 days per relayer; deadline ≤ 1 h on `Pause` messages; withdrawals below `delayThreshold` continue under the undelayed test and the daily cap (D2); `mint-mismatch` is a full pause on Credits | code | — |
-| Credits signing depth | 30 blocks (TO VERIFY) | vote | ≥ 10 |
+| Credits signing depth | 10 blocks (≈ 13 s at the measured 1.26 s per block; owner's decision 2026-11-06) | vote | ≥ 10 |
 | Withdrawal records kept in full | 1,024 to 2,048 | code | — |
 | Pending mint window / expiry | 256 ids above the attested deposit id / 30 days | code | — |
 | Service after permanent block | 12 months, bonds until supply < 1 % or 24 months | code | — |
@@ -1475,6 +1475,7 @@ tests nightly. Heavy jobs never run on the shared server.
 | BSC finality | `finalized` 1–2 blocks behind `latest` (≈ 0.45–0.9 s) on mainnet and testnet RPCs, 2026-11-06 |
 | Delegations readable from the node API | `api.thrift` `DelegatedItem` (`wallet`, `sum`, `validUntil`, `fromTime`, `coeff`); contracts cannot read them |
 | 1-year delegations | `coeff = Anni = 4` for a term ≥ 4 × 7,862,400 s; timed delegations cannot be withdrawn before expiry; minimum 5 CS (`csnode/src/nodecore.cpp`, `itervalidator.cpp`) |
+| Mainnet block interval | Last 100 blocks of the owner's mainnet node (2026-11-06): mean 1.26 s, median 1.21 s, max 4.2 s; node logs to 2026-10-24 show no uncertain-block, fork or block-removal event |
 | Block time on a real network | Private network: `getBlockchainTimeMills()` in two calls 23.2 s apart (wall clock) returned values 22.7 s apart, 1.1–1.6 s ahead of the sender's clock, recorded identically on all 5 nodes (re-execution while syncing not covered) |
 | `payable` with user data | Private network: 11 CS with text user field `bond:relayer-1` accepted; the contract received 11 CS and the exact user data |
 | Emitted transfers on a real network | Private network: `sendTransaction(contract, wallet, 3, userData)` delivered exactly 3 CS with no user fields (type 16); an emitted transfer to another contract failed the whole call ("call to contract failed", no CS moved, state unchanged) |
@@ -1494,7 +1495,7 @@ emitted amounts and failed-call reporting are verified in [§13.1](#131-verified
 2. Amounts with many decimals through the `double` of `sendTransaction` (whole amounts verified).
 3. Why `getBalance` inside a contract differs from `WalletBalanceGet` (not used by the design).
 4. How the API reports failed `approveMint` and `burnForBsc` calls to relayers and users.
-5. Credits reorganisation depths observed on mainnet, to set `creditsConfirmations`.
+5. Credits reorganisation depths on mainnet over a longer period, to confirm `creditsConfirmations` = 10 (none seen in the logs available on 2026-11-06).
 6. Performance at the bounds of [§5.11](#511-bounded-state-and-work) on both executors.
 7. The token cache shows csUSDT balances after mints, burns, fills and internal moves.
 
@@ -1623,7 +1624,7 @@ must lie between 0.019 and 0.024.
 | 6 | Carol deposits 500 USDT (id 1); R2 and R3 approve | Carol → vault: 500 | 500 minted: 0.05 → fund, ≈ 9.99 → Bob, ≈ 0.01 → fund, ≈ 489.95 → Carol | escrow → Carol: ≈ 499.45 |
 | 7 | Carol calls `buy` for 10,000 CS at up to 0.020 | — | Carol → Bob: 200; Carol → fund: 0.20 | escrow → Carol: 10,000 |
 | 8 | Bob calls `burnForBsc(200, 0xBob)`: withdrawal id 0 | — | 0.05 → fund; 199.95 burned | — |
-| 9 | Once the burn is 30 blocks deep, R1 and R3 sign `Claim(id 0, 0xBob, 199.95)` and publish the signatures | — | — | — |
+| 9 | Once the burn is 10 blocks deep (≈ 13 s), R1 and R3 sign `Claim(id 0, 0xBob, 199.95)` and publish the signatures | — | — | — |
 | 10 | Bob opens the claim page, which collects 2 signatures, and sends `claim` on BSC. 199.95 is below 1,000: paid at once | vault → Bob: 199.95 | — | — |
 
 **After step 10.**

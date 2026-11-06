@@ -4,7 +4,7 @@ Status: draft, revision 3 (2026-11-06), after the security review in
 [reviews/2026-11-06-spec-security-review.md](reviews/2026-11-06-spec-security-review.md) and the
 re-review of the owner's decisions in
 [reviews/2026-11-06-decisions-re-review.md](reviews/2026-11-06-decisions-re-review.md). All
-decisions D1–D10 are taken ([§14](#14-open-decisions)). Awaiting the owner's approval; no code is
+decisions D1–D11 are taken ([§14](#14-open-decisions)). Awaiting the owner's approval; no code is
 written against it yet.
 
 This document specifies a bridge that carries USDT from BNB Smart Chain (BSC) to the Credits
@@ -152,7 +152,7 @@ values of [§11](#11-parameters).
 | **Ask** | An offer to sell CS for csUSDT at a price; the seller sends the CS with `payable()`. |
 | **Bid** | An offer to buy CS with csUSDT at a price. |
 | **Maker**, **taker**, **fill** | The maker placed the offer, the taker accepts it; a fill is one matched trade. The taker pays the 0.1 % swap fee. |
-| **Free market** | The contract imposes no price limit (decision D1); a depositor may set a maximum price for their own conversion. |
+| **Free market**, **price band** | Prices are free inside a daily band (decisions D1, D11): an offer cannot be more than 5 % below or 20 % above the reference price, which is the previous day's average price of trades of at least 100 csUSDT (at the opening, the conservative price). If no such trade happens for 3 days, the reference falls 5 % a day so the market cannot freeze. A depositor may also set a maximum price for their own conversion. |
 | **Buyback** | Fees (bridge and swap) buy CS from the lowest asks; the CS go to relayers and their delegators. |
 | **Epoch**, **slot** | The reward period (7 days) and its hours (168 slots); each slot spends at most 1/168 of the epoch's fund (`buybackTick`). |
 | **Owner share** | 20 % of a relayer's reward to the owner wallet; the rest to its delegators pro rata (the 100 largest). |
@@ -217,7 +217,7 @@ threshold of relayers unable to steal (see [§3](#3-trust-model)).
 | Slashing | Automatic, by proof of a false withdrawal signature, verified in the Credits contract, callable in every state |
 | Fees | Bridge fee 0.05 csUSDT each way; swap fee 0.1 % paid by the taker; both fund a CS buyback for relayers and their delegators |
 | CS for new users | 2 % of each deposit (min 1, max 20 csUSDT) bought as CS from the lowest asks at mint |
-| Prices | Free market: no price limit imposed by the contract, also on automated purchases; the depositor MAY set a maximum CS price for their own conversion; the buyback is spread in hourly slices over the epoch ([§8.4](#84-fees-buyback-and-rewards)) |
+| Prices | Free market inside a daily price band (asks and bids within −5 % / +20 % of the previous day's reference price, D11); no further limit on automated purchases; the depositor MAY set a maximum CS price for their own conversion; the buyback is spread in hourly slices over the epoch ([§8.4](#84-fees-buyback-and-rewards)) |
 | Large claims | Above 1,000 USDT per rolling 24 h (cumulative, not per claim), 24-hour delay unless the signatures include a majority of the whitelist |
 | Exit | Permanent block → withdraw-only on both chains; each user withdraws, or migrates their own funds to new contracts registered by vote, with a fallback to their own BSC address |
 
@@ -423,6 +423,7 @@ compaction), bounded in work per call ([§5.11](#511-bounded-state-and-work)).
 | `signerSets: List<SignerSetRecord>` | Every vault signer set by nonce: signers, founders to add, freeze flag, hash (underspecified 3) | the last 64 sets in full, older as hashes |
 | `asks`, `bids: TreeMap<PriceKey, Order>` | Order book, price then id | ≤ 2,000 open orders in total, ≤ 20 per wallet, minimum size 10 CS and 0.10 csUSDT (C3) |
 | `lastPrice`, `dailyStats[8]` | Last fill price; per-day CS and csUSDT volumes for the 7-day VWAP | fixed |
+| `refPrice`, `refDay`, `idleDays` | Reference price of the daily price band, the UTC day it applies to, consecutive days without a qualifying fill (D11) | fixed |
 | `buybackFund: BigDecimal` | csUSDT from fees, not yet spent | — |
 | `epochFund`, `sliceBudget`, `epochStart`, `lastSlot` | `epochFund` is the part of `buybackFund` reserved for the current epoch's slices (a sub-ledger, not a separate balance: I5 counts `buybackFund` once); its 1/168 hourly slice; start of the epoch; last hour slot consumed (N3) | fixed |
 | `csClaimable: Map<String, BigDecimal>` | CS owed to wallets (conversions, rewards, refunds) | one per wallet; claims below 0.001 CS stay in dust |
@@ -656,6 +657,24 @@ participation ([§8.4](#84-fees-buyback-and-rewards)).
 - A seller into bids receives `qty × price − swapFee`, rounded down.
 - `lastPrice` = price of the last fill; `dailyStats` roll at UTC day boundaries of block time;
   the 7-day VWAP uses the last 7 complete days.
+- **Daily price band (decision D11).** Every ask and bid price MUST lie within
+  `[refPrice × (1 − bandDown), refPrice × (1 + bandUp)]` (initially −5 % / +20 %); an order
+  outside is refused. Fills happen at the resting order's price, so every fill is inside the band.
+  - `refPrice` for a UTC day (block time) = the VWAP of the previous day counting only
+    **qualifying fills**, whose value is at least `bandMinTrade` (100 csUSDT), so tiny trades
+    cannot move it step by step. It is computed lazily at the first call of the day.
+  - **Opening:** before the first qualifying day `refPrice = conservativePrice` (set by vote);
+    while it is 0 no order can be placed.
+  - **Anti-freeze:** if a day has no qualifying fill, `refPrice` is unchanged; after `bandIdleDays`
+    (3) consecutive such days it falls by `bandDown` for every further idle day, until a qualifying
+    fill resets `idleDays`. A price set too high therefore cannot freeze the market for good.
+  - **Orders left outside a new band** stay in the book but are not filled: matching starts at the
+    first ask ≥ the band's floor (a sorted map, `tailMap`) and stops at the band's ceiling; the
+    same for bids. Their owners may cancel them as usual.
+  - The conversion at mint and the buyback follow the same matching, so they never buy outside
+    the band; they keep no price limit of their own (D1).
+  - Effect: the price can fall at most `bandDown` per day (a halving takes about 14 days at 5 %)
+    and rise at most `bandUp` per day.
 - At most 50 fills per call; the rest of the order is returned unspent.
 - The founder phase closes at the first single `buy` (not a conversion, not the buyback) in which
   the buyer paid ≥ 100 csUSDT in total and the buyer differs from every seller filled; or 6 months
@@ -1239,7 +1258,7 @@ withdrawals, so a false alarm never locks users out.
 | Bond slashed | Out of the set at once; CS to the slash reserve, vault bond to `reserveOf` by `T` signatures; 30-day appeal; any use of the reserve by a two-thirds vote ([§8.8](#88-slashing-by-proof)) |
 | Slashed relayer appeals | Removal stays in force; a two-thirds vote may return the bond (CS on Credits, USDT by `useReserve`) |
 | Two data hashes each reaching `T` for one deposit | Automatic pause `mint-mismatch`; resolution by vote with attested data |
-| Price manipulation | Free market (D1); the buyback runs in lazy hourly slices ([§8.4](#84-fees-buyback-and-rewards)); conversion at mint ≤ `conversionMax` per deposit, with the page's default `maxCsPrice`; entry bonds use `min(conservative, VWAP)` so wash trades make entry dearer |
+| Price manipulation | Daily price band (D11): asks and bids within −5 %/+20 % of the previous day's VWAP of fills ≥ 100 csUSDT; a crash at the opening or a step-by-step walk-down is not possible. Residual: wash trades of ≥ 100 csUSDT between own wallets can still push `refPrice` up by up to 20 % a day at the cost of the swap fee; buyers then stop, and the anti-freeze decay brings it back; entry bonds use `min(conservative, VWAP)`. Otherwise free market (D1); the buyback runs in lazy hourly slices ([§8.4](#84-fees-buyback-and-rewards)); conversion at mint ≤ `conversionMax` per deposit, with the page's default `maxCsPrice`; entry bonds use `min(conservative, VWAP)` so wash trades make entry dearer |
 | Applicant never attested | `cancelApplication()` 7 days after applying; missing attestations lower the incumbents' participation (N5) |
 | Applicant would break the cap bound | `activate` refused (I18); it adds CS or waits for a lower cap |
 | Bootstrap taken over by strangers | Possible before the link (N6); the address is published only after the link with the founders' wallets; redeploy if needed |
@@ -1313,6 +1332,9 @@ withdrawals, so a false alarm never locks users out.
 | Minimum deposit / withdrawal | 5 USDT / 5 csUSDT | vote | ≥ 1; `minWithdrawal ≥ bridgeFee + 1` (L3) |
 | Bridge fee | 0.05 csUSDT per direction | vote | ≤ 1 csUSDT |
 | Swap fee | 0.1 % (taker) | vote | ≤ 1 % |
+| Price band down / up (D11) | 5 % / 20 % per UTC day around `refPrice` | vote | down 1–20 %, up 5–100 % |
+| Band qualifying fill | 100 csUSDT | vote | 10–10,000 |
+| Band idle days before decay | 3 | vote | 1–30 |
 | Conversion at mint | 2 %, min 1, max 20 csUSDT | vote | rate ≤ 10 %, max ≤ 100 csUSDT |
 | Order limits | min 10 CS / 0.10 csUSDT; ≤ 20 per wallet; ≤ 2,000 total | code | — |
 | Reward epoch / participation | 7 days / 80 % | code | — |
@@ -1352,6 +1374,9 @@ official 1518), every answer compared between the two (the comparison already ru
 - withdrawals, compaction into Merkle roots, proofs on recent and compacted ids, the reorg margin,
   high-`s` and tampered signatures (secp256k1 measured on both executors: [§13.1](#131-verified));
 - order book: fills, rounding, fees, limits per call and per wallet, founder-phase closing rule;
+- price band: orders refused outside it, `refPrice` from qualifying fills only, the opening at the
+  conservative price, the anti-freeze decay, orders parked outside a new band, conversion and
+  buyback inside the band;
 - payable grammar and invalid user data;
 - epochs and reward allocation, resumable;
 - governance timing, hard caps, state matrix of [§5.12](#512-methods-by-contract-state) including
@@ -1478,7 +1503,7 @@ These need a decision by the project owner. Until then the text follows the curr
 
 | # | Topic | Current decision | Review concern | Options |
 |---|---|---|---|---|
-| D1 | Price limits on automated purchases (H8, M3) | **Decided 2026-11-06.** No price limit anywhere: the conversion at mint is small (≤ `conversionMax`) and a free market rewards whoever sells CS; the buyback is spread in hourly slices of 1/168 of the epoch fund (option d) | — | — |
+| D1 | Price limits on automated purchases (H8, M3) | **Decided 2026-11-06.** No price limit of their own on automated purchases (the daily band of D11 applies to every order): the conversion at mint is small (≤ `conversionMax`) and a free market rewards whoever sells CS; the buyback is spread in hourly slices of 1/168 of the epoch fund (option d) | — | — |
 | D2 | Single-relayer pause (H2, former §14.3) | **Decided 2026-11-06.** Withdrawals below 1,000 USDT continue during a pause, within the daily cap; one pause per relayer per 7 days; an unfounded pause makes the pauser `Inactive` for 30 days ([§8.9](#89-pause-and-unpause)) | — | — |
 | D3 | Objection during the 7-day wait (M6) | **Decided 2026-11-06: removed.** Admission is automatic; only a `T` attestation of ineligibility rejects an applicant | — | — |
 | D4 | Use of the slash reserve | **Decided 2026-11-06.** Never used at once; 30-day appeal window for the slashed relayer; any use (return after a successful appeal, users' reimbursement, prover's share) only by a two-thirds vote of active relayers ([§8.8](#88-slashing-by-proof)) | — | — |
@@ -1488,6 +1513,7 @@ These need a decision by the project owner. Until then the text follows the curr
 | D8 | Minimum CS share in a new entrant's bond (N1) | **Decided 2026-11-06.** At least half of the required value in CS (`bondCs × entryPrice ≥ R / 2`), the rest CS or USDT on the vault (≥ 50); the activation check (I18) stays | — | — |
 | D9 | Escalation of a pause (N2) | **Decided 2026-11-06.** A second, distinct relayer pausing while a pause is open makes it a full pause on that chain (small burns and claims stop); both pausers bear the pause limits ([§8.9](#89-pause-and-unpause)) | — | — |
 | D10 | Bootstrap protection (N6) | **Decided 2026-11-06: (a).** Operational defence only (publish the Credits address after the link, with the founders' node wallets; `activateBootstrap` callable only by an applicant). Owner's assessment: a takeover needs several strangers with 1M CS of one-year delegations each and gains nothing, so it is not expected; if it happens, the project redeploys and no user funds are at risk | — | — |
+| D11 | Price band (owner's proposal, 2026-11-06) | **Decided 2026-11-06.** Asks and bids within −5 % / +20 % of a daily reference price (previous day's VWAP of fills ≥ 100 csUSDT; the conservative price at the opening); anti-freeze decay after 3 idle days; all configurable by vote within hard caps ([§5.9](#59-order-matching)). Refines D1: free market inside the band | — | — |
 
 ---
 

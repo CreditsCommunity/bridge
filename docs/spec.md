@@ -1,9 +1,11 @@
 # USDT bridge for Credits: specification
 
-Status: draft, revision 2 (2026-11-06), after the security review in
-[reviews/2026-11-06-spec-security-review.md](reviews/2026-11-06-spec-security-review.md).
-Not approved. No code is written against it yet. Decisions still open are in
-[§14](#14-open-decisions); until they are taken, the text follows the user's current decision.
+Status: draft, revision 3 (2026-11-06), after the security review in
+[reviews/2026-11-06-spec-security-review.md](reviews/2026-11-06-spec-security-review.md) and the
+re-review of the owner's decisions in
+[reviews/2026-11-06-decisions-re-review.md](reviews/2026-11-06-decisions-re-review.md). All
+decisions D1–D10 are taken ([§14](#14-open-decisions)). Awaiting the owner's approval; no code is
+written against it yet.
 
 This document specifies a bridge that carries USDT from BNB Smart Chain (BSC) to the Credits
 network as csUSDT, 1 to 1, and back; a CS ↔ csUSDT order book on Credits; and the relayer network
@@ -22,6 +24,7 @@ cited where a rule exists because of a finding.
 
 ## Contents
 
+0. [Glossary](#0-glossary)
 1. [Overview and goals](#1-overview-and-goals)
 2. [Decisions](#2-decisions)
 3. [Trust model](#3-trust-model)
@@ -37,6 +40,132 @@ cited where a rule exists because of a finding.
 13. [Runtime facts and what is still to verify](#13-runtime-facts-and-what-is-still-to-verify)
 14. [Open decisions](#14-open-decisions)
 15. [Review findings and where they are addressed](#15-review-findings-and-where-they-are-addressed)
+
+---
+
+## 0. Glossary
+
+Terms in the order a reader meets them. Code names are in `backticks`; numbers are the initial
+values of [§11](#11-parameters).
+
+### Chains, tokens and contracts
+
+| Term | Meaning |
+|---|---|
+| **BSC** | BNB Smart Chain, where the USDT that backs the bridge is held. |
+| **Credits**, **CS** | The Credits blockchain and its native coin. Transaction fees on Credits are paid in CS. |
+| **USDT** | Tether's dollar token on BSC (18 decimals there). |
+| **csUSDT** | "Credits Bridged USDT", the token on Credits, 8 decimals. Each csUSDT is backed by one USDT in the vault; it is not issued by Tether. |
+| **Vault**, `UsdtVault` | The Solidity contract on BSC that holds users' USDT, the relayers' USDT bonds and the reserve, and pays withdrawals. No owner, no proxy. |
+| **Bridge contract**, `CsUsdtBridge` | The single Java contract on Credits: csUSDT token, mints and burns, relayer registry, bonds, order book, buyback, governance. Credits contracts cannot call other contracts, so everything lives in one. |
+| **Executor** | The Java process next to each Credits node that runs contract code. The official build 1518 and the community build must give identical results. |
+| **Getter** | A read-only contract method (`@Getter`), free to call, that changes nothing. |
+| **State** | The serialized fields of a contract after a call; every node must end with the same state. |
+| **Emitted transfer** | A CS transfer that a contract sends during a call (`sendTransaction`). It carries no user data and cannot go to another contract. |
+| **User data** | The text field of a CS transfer to a contract; `payable()` reads it as a command (for example a bond or an ask). |
+| **`payable()`** | The contract method the node runs when CS are sent to the contract. If it throws, the CS return to the sender minus the fee. |
+| **Lazy update** | Work done at the start of the next call instead of by a timer (contracts have no timers): epoch roll, buyback slot, status changes. |
+
+### Moving money across
+
+| Term | Meaning |
+|---|---|
+| **Deposit** | A user locks USDT in the vault with `deposit`; the vault gives it the next **deposit id** (0, 1, 2, …). |
+| **Mint** | Creation of csUSDT on Credits for a deposit, once enough relayers approved it. |
+| **Approval** (`approveMint`) | A relayer's Credits transaction saying "deposit id X carries this data". Approvals are counted per data hash. |
+| **Orphan approval** | An approval whose data differs from the data that reached the threshold; it marks the approver, it never blocks the mint. |
+| **Mint mismatch** | Two different data hashes both reaching the threshold for one deposit: the bridge pauses fully. |
+| **Conversion** | At mint, a small part of the deposit (2 %, between 1 and 20 csUSDT) buys CS from the asks, so the user can pay Credits fees. |
+| **Burn**, **withdrawal** (`burnForBsc`) | A user destroys csUSDT on Credits and names a BSC address; the contract records the withdrawal under the next **withdrawal id**. |
+| **Claim** | The BSC transaction, sent by the user, that presents the relayers' signatures for a withdrawal and receives the USDT. **Kind 0** pays the user; **kind 1** moves funds to a new vault during a migration. |
+| **Claim page** | A static web page that collects the published signatures and builds the claim. |
+| **EIP-712** | The Ethereum standard for signing structured data; the vault checks relayer signatures with it, bound to the BSC chain id and the vault address so they cannot be replayed elsewhere. |
+| **Finalized block** | A BSC block that can no longer be reorganized (about 1–2 blocks behind the tip). Relayers read deposits only from finalized blocks. |
+| **Signing depth** | How many Credits blocks must follow a burn before relayers sign it (30, to verify). |
+| **Bridge fee** | 0.05 csUSDT taken in each direction. |
+
+### Limits on what can go wrong
+
+| Term | Meaning |
+|---|---|
+| **Vault cap** | The most USDT of users the vault accepts. 10,000 at start, at most 20,000 while the founders can reach the threshold alone, later bounded by the relayers' CS bonds. |
+| **Daily cap** | The most USDT the vault pays in any rolling 24 hours (2,000, at most a fifth of the vault cap); claims beyond it wait in the queue. |
+| **Delay threshold** | 1,000 USDT. Larger claims, or claims that would push the last 24 hours above it, wait 24 hours unless a majority of the whitelist signed them. |
+| **Undelayed window** | The amount paid in the last 24 hours without a whitelist majority; counts against the delay threshold. |
+| **Queue** | Claims waiting for the daily cap or the 24-hour delay; any relayer can pause in the meantime. |
+| **Invariant** | A rule that must always hold, numbered I1–I19 in [§10](#10-invariants). The main one: csUSDT in circulation plus unpaid withdrawals never exceed the users' USDT in the vault. |
+| **Watchdog** | The checks each relayer runs every cycle (invariants, unknown claims, conflicting data); on a failure it pauses and publishes the evidence. |
+
+### Relayers and their group
+
+| Term | Meaning |
+|---|---|
+| **Relayer** | A Credits full node with the relayer software: it reads both chains, approves mints on Credits, signs withdrawals for BSC, and watches. It holds a Credits key and a BSC signing key. |
+| **Node wallet**, **owner wallet** | The wallet of the relayer's node, and the wallet of the person behind it (they receive the owner share of rewards). |
+| **Active set**, **`N`** | The relayers currently allowed to approve and sign; `N` is their number. |
+| **Threshold `T`** | How many relayers must agree: `max(2, min(floor(N/2) + 1, 7))`, so 2 of 3, 3 of 4 or 5, …, 7 from 13 relayers up. |
+| **`U`** | Agreement needed to lift a pause: `max(T, ceil(2N/3))`. |
+| **Signer set** | The list of relayers' BSC keys the vault accepts, with a **nonce** that grows at every change. It follows the active set on Credits. |
+| **Eligibility** | The admission rule: at least 1M CS delegated to the node wallet with one-year delegations, from at least 2 wallets other than the owner's. |
+| **Delegation**, **one-year delegation** | CS that a wallet lends to a node's stake; a delegation of at least about 364 days has coefficient 1 for rewards (`coeff = Anni`) and cannot be withdrawn early. |
+| **Attestation** | A relayer's statement on Credits of a fact the contract cannot read itself (eligibility, vault values, the vault address); it counts when `T` relayers attest the same value. |
+| **Digest** | An hourly fingerprint of what a relayer sees on both chains; a relayer that differs from the majority gets a **divergence mark**. |
+| **Participation** | Share of the epoch's approvals and digests a relayer took part in; at least 80 % to earn rewards, below 50 % in 14 days it becomes inactive. |
+| **Inactive** | A relayer temporarily out of the active set (offline, divergent, delegations below 1M); reversible, no loss of bond. |
+| **Version hash** | The hash of an admitted relayer software build; approvals from builds not admitted are refused. |
+| **Founder** | A relayer that applied before the founder phase closed; it keeps the founder bond (100k CS + 50 USDT) for good. |
+| **Founder phase** | From the start until the first CS purchase of at least 100 csUSDT, 6 months, or 7 relayers, whichever comes first. |
+| **Whitelist** | Relayers whose majority lets large claims skip the 24-hour delay. Managed by a majority of founders; by all relayers if fewer than 2 founders remain for 30 days. |
+| **Bootstrap**, **AwaitingVault**, **link** | The start-up states of the Credits contract: founders apply and attest each other; at least 3 activate it; the vault is deployed with them; the founders attest (link) the vault address. |
+
+### Bonds, proofs and penalties
+
+| Term | Meaning |
+|---|---|
+| **Bond** | What a relayer locks to answer for its behaviour: CS in the Credits contract (`bondCs`) plus USDT in the vault (at least 50). New entrants: at least 1,000 USDT of value or 10 % of the vault, at least half in CS. |
+| **Conservative price** | A cautious CS price in USDT set by relayer vote; used to value CS bonds against the vault cap. |
+| **Entry price** | The lower of the conservative price and the 7-day **VWAP** (volume-weighted average price of trades); used to value a new entrant's CS bond. |
+| **Smallest T-set** | The cheapest group of `T` active relayers by CS bond; their bonds at the conservative price must cover the vault cap. |
+| **False signature** | A relayer's signature on a withdrawal that the Credits contract never recorded, or recorded with other data. |
+| **Proof** (`proveFalseSignature`) | Anyone presents a false signature; the Java contract checks it (secp256k1) and slashes the signer at once. |
+| **Slashing** | The relayer is removed from the active set and its bonds go to the **slash reserve**. |
+| **Prover** | Whoever submits the proof; 10 % of the slashed CS is earmarked for them. |
+| **Appeal** | Within 30 days the slashed relayer may publish evidence that it was not at fault (stolen key, Credits reorganization). |
+| **Slash reserve** | Confiscated CS and USDT. Used only by a two-thirds vote of active relayers: return after an appeal, reimburse users after a shortfall, pay the prover. |
+
+### Emergency and end of life
+
+| Term | Meaning |
+|---|---|
+| **Pause** | Emergency stop that any single relayer can start. Withdrawals below 1,000 USDT continue within the daily cap; everything else stops. One pause per relayer per 7 days. |
+| **Full pause** | A pause where small withdrawals stop too: started by a second, distinct relayer during a pause, or automatically by a mint mismatch. |
+| **Unpause** | Lifting a pause needs `U` relayers; if they declare it unfounded, the pauser becomes inactive for 30 days. |
+| **Permanent block** | Decided by vote: no new deposits, mints, orders or relayers; withdrawals stay open (**withdraw-only**). |
+| **Migration** | After a block, each user may choose to move their own funds to new contracts registered by vote; a **fallback address** of the user receives the USDT if the new vault does not accept within 30 days. There is no function that moves everyone's funds. |
+| **End of life** | After a block, relayers stay active and bonded for 12 months (up to 24 while funds remain) so that the last withdrawals can be paid. |
+
+### Trading and rewards
+
+| Term | Meaning |
+|---|---|
+| **Order book** | The list of open offers inside the bridge contract. |
+| **Ask** | An offer to sell CS for csUSDT at a price; the seller sends the CS with `payable()`. |
+| **Bid** | An offer to buy CS with csUSDT at a price. |
+| **Maker**, **taker**, **fill** | The maker placed the offer, the taker accepts it; a fill is one matched trade. The taker pays the 0.1 % swap fee. |
+| **Free market** | The contract imposes no price limit (decision D1); a depositor may set a maximum price for their own conversion. |
+| **Buyback** | Fees (bridge and swap) buy CS from the lowest asks; the CS go to relayers and their delegators. |
+| **Epoch**, **slot** | The reward period (7 days) and its hours (168 slots); each slot spends at most 1/168 of the epoch's fund (`buybackTick`). |
+| **Owner share** | 20 % of a relayer's reward to the owner wallet; the rest to its delegators pro rata (the 100 largest). |
+| **`csClaimable`** | CS the contract owes to a wallet (conversions, rewards, refunds); the wallet takes them with `claimCs`. |
+| **Return address** | Where the contract sends a wallet's CS; it defaults to the wallet itself and can be changed by its owner. Exchange addresses that need a memo must not be used: emitted transfers carry no memo. |
+
+### Governance
+
+| Term | Meaning |
+|---|---|
+| **Proposal**, **vote** | Any active relayer proposes a change; votes run 14 days and it passes with more than half of the active relayers (two thirds for the slash reserve); it can be executed from 7 days after the end of the vote (or after it passed, if later) for 21 days. |
+| **Hard cap** | A limit written in the code that no vote can exceed (for example swap fee ≤ 1 %, bridge fee ≤ 1 csUSDT). |
+| **Risk-lowering change** | A change that only reduces exposure (lower cap, lower daily cap, lower conservative price); it applies as soon as it has passed, also while paused or blocked. |
 
 ---
 
